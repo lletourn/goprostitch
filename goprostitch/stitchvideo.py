@@ -156,7 +156,6 @@ def main():
 
     left_frame = None
     right_frame = None
-    camera_params = None
     match_histograms = None
 
     with av.open(output_filename, mode='w') as output_container:
@@ -202,7 +201,7 @@ def main():
                     if match_histograms is None:
                         match_histograms = MatchHistogram(left_image)
 
-                    pano, camera_params = fix_and_stitch(match_histograms, left_image, right_image, camera_params)
+                    pano = fix_and_stitch(match_histograms, left_image, right_image)
                     pano = pano[385:385+output_height, 670:670+output_width]
                     av_videoframe = av.VideoFrame.from_ndarray(pano, format='bgr24')
                     av_videoframe.pts = left_frame.pts
@@ -241,27 +240,17 @@ def main():
     right_processor.close()
 
 
-def fix_and_stitch(match_histograms, left_frame, right_frame, camera_params):
+def fix_and_stitch(match_histograms, left_frame, right_frame):
     # right_frame = exposure.match_histograms(right_frame, left_frame, multichannel=True)
     right_frame = match_histograms.match(right_frame)
 
     pano = None
     stitcher = cv2.Stitcher.create(cv2.Stitcher_PANORAMA)
-    if camera_params is None:
-        status, pano = stitcher.stitch([left_frame, right_frame])
-        if status != cv2.Stitcher_OK:
-            raise RuntimeError("Can't stitch images, error code = %d" % status)
+    status, pano = stitcher.stitch([left_frame, right_frame])
+    if status != cv2.Stitcher_OK:
+        raise RuntimeError("Can't stitch images, error code = %d" % status)
 
-        camera_params = list()
-        camera_params.append(stitcher.cameras(0))
-        camera_params.append(stitcher.cameras(1))
-    else:
-        stitcher.setTransformCams([left_frame, right_frame], camera_params[0], camera_params[1])
-        status, pano = stitcher.composePanorama([left_frame, right_frame])
-        if status != cv2.Stitcher_OK:
-            raise RuntimeError("Can't compose images, error code = %d" % status)
-
-    return pano, camera_params
+    return pano
 
 
 if __name__ == '__main__':
