@@ -157,6 +157,24 @@ def main():
     left_frame = None
     right_frame = None
     match_histograms = None
+    camera_left = cv2.detail.CameraParams()
+    camera_left.focal = 1380.9097896938035
+    camera_left.aspect = 1.0
+    camera_left.ppx = 516.5
+    camera_left.ppy = 290.5
+    camera_left.R = np.array([[9.7980595e-01, -5.8920074e-02, -1.9107230e-01], [-9.6140185e-10,  9.5559806e-01, -2.9467332e-01], [1.9995050e-01, 2.8872266e-01, 9.3630064e-01]], dtype=np.float32)
+    camera_left.t = np.array([[0.], [0.], [0.]], dtype=np.float64)
+
+    camera_right = cv2.detail.CameraParams()
+    camera_right.focal = 1384.4108312478572
+    camera_right.aspect = 1.0
+    camera_right.ppx = 516.5
+    camera_right.ppy = 290.5
+    camera_right.R = np.array([[9.7996306e-01, 5.6246426e-02, 1.9107229e-01], [2.2138309e-08, 9.5929933e-01, -2.8239137e-01], [-1.9917902e-01, 2.7673310e-01, 9.4007784e-01]], dtype=np.float32)
+    camera_right.t = np.array([[0.], [0.], [0.]], dtype=np.float64)
+
+    camera_params = [camera_left, camera_right]
+    # camera_params = None
 
     with av.open(output_filename, mode='w') as output_container:
         options = {"crf": str(23)}
@@ -201,19 +219,17 @@ def main():
                     if match_histograms is None:
                         match_histograms = MatchHistogram(left_image)
 
-                    pano = fix_and_stitch(match_histograms, left_image, right_image)
+                    pano, camera_params = fix_and_stitch(match_histograms, left_image, right_image, camera_params)
                     pano = pano[385:385+output_height, 670:670+output_width]
                     av_videoframe = av.VideoFrame.from_ndarray(pano, format='bgr24')
                     av_videoframe.pts = left_frame.pts
                     new_packet = output_video_stream.encode(av_videoframe)
                     output_container.mux(new_packet)
-                    if frame_idx_since_midnight > 60*5:
-                        break
 
                     # scale = 0.1
-                    # cv2.imshow("Left", cv2.resize(left_frame.data, (1280, 720)))
-                    # cv2.imshow("Right", cv2.resize(right_frame.data, (1280, 720)))
                     # cv2.imshow("Pano", cv2.resize(pano, (int(pano.shape[1]*scale), int(pano.shape[0]*scale))))
+                    # cv2.imshow("Left", cv2.resize(left_image, (1280, 720)))
+                    # cv2.imshow("Right", cv2.resize(right_image, (1280, 720)))
                     # cv2.waitKey()
                     # cv2.destroyAllWindows()
                     left_frame = None
@@ -240,17 +256,44 @@ def main():
     right_processor.close()
 
 
-def fix_and_stitch(match_histograms, left_frame, right_frame):
+def print_camera_params(camera):
+    print(camera.focal)
+    print(camera.aspect)
+    print(camera.ppx)
+    print(camera.ppy)
+    print(camera.R)
+    print(camera.R.dtype)
+    print(camera.t)
+    print(camera.t.dtype)
+
+
+def fix_and_stitch(match_histograms, left_frame, right_frame, camera_params):
     # right_frame = exposure.match_histograms(right_frame, left_frame, multichannel=True)
     right_frame = match_histograms.match(right_frame)
 
     pano = None
     stitcher = cv2.Stitcher.create(cv2.Stitcher_PANORAMA)
-    status, pano = stitcher.stitch([left_frame, right_frame])
-    if status != cv2.Stitcher_OK:
-        raise RuntimeError("Can't stitch images, error code = %d" % status)
+    if camera_params is None:
+        status, pano = stitcher.stitch([left_frame, right_frame])
+        if status != cv2.Stitcher_OK:
+            raise RuntimeError("Can't stitch images, error code = %d" % status)
 
-    return pano
+        camera_params = list()
+        c1 = stitcher.cameras(0)
+        c2 = stitcher.cameras(1)
+
+        # print_camera_params(c1)
+        # print_camera_params(c2)
+
+        camera_params.append(c1)
+        camera_params.append(c2)
+    else:
+        stitcher.setTransformCams([left_frame, right_frame], camera_params[0], camera_params[1])
+        status, pano = stitcher.composePanorama([left_frame, right_frame])
+        if status != cv2.Stitcher_OK:
+            raise RuntimeError("Can't compose images, error code = %d" % status)
+
+    return pano, camera_params
 
 
 if __name__ == '__main__':
