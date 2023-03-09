@@ -1,136 +1,49 @@
 import argparse
-import av
-import collections
+from ctypes import c_bool
 import cv2
-import fractions
 import logging
+import multiprocessing
 import numpy as np
-# from skimage import exposure
+# import threading
 import time
+
+from goprostitch.framestitcher import FrameParts
+from goprostitch.framestitcher import stitch_frames
+from goprostitch.inputprocessor import InputPacketType
+from goprostitch.inputprocessor import process_input
+from goprostitch.outputwriter import process_output
 
 
 logger = logging.getLogger(__name__)
 
 
-class MatchHistogram:
-    """
-    Modified from https://github.com/scikit-image/scikit-image/blob/main/skimage/exposure/histogram_matching.py
-    """
-    def __init__(self, reference_image):
-        self.channel_reference_quantiles = list()
-        self.channel_reference_values = list()
-        for channel in range(reference_image.shape[-1]):
-            channel_quantiles, channel_values = self._build_reference_histogram(reference_image[..., channel])
-            self.channel_reference_quantiles.append(channel_quantiles)
-            self.channel_reference_values.append(channel_values)
+def handle_final_data(video_queue, left_audio_queue, right_audio_queue, panorama_queue, panoramas, left_audio_packets, right_audio_packets, video_idx, left_audio_idx, right_audio_idx):
+    while not panorama_queue.empty():
+        panorama = panorama_queue.get()
+        panoramas[panorama.idx] = panorama
 
-    def _build_reference_histogram(self, reference_channel):
-        counts = np.bincount(reference_channel.reshape(-1))
+    while video_idx in panoramas or left_audio_idx in left_audio_packets or right_audio_idx in right_audio_packets:
+        if video_idx in panoramas:
+            video_queue.put(panoramas[video_idx])
+            del panoramas[video_idx]
+            video_idx += 1
 
-        # omit values where the count was 0
-        channel_values = np.nonzero(counts)[0]
-        counts = counts[channel_values]
-        channel_quantiles = np.cumsum(counts) / reference_channel.size
+        if left_audio_idx in left_audio_packets:
+            left_audio_queue.put(left_audio_packets[left_audio_idx])
+            del left_audio_packets[left_audio_idx]
+            left_audio_idx += 1
 
-        return channel_quantiles, channel_values
+        if right_audio_idx in right_audio_packets:
+            right_audio_queue.put(right_audio_packets[right_audio_idx])
+            del right_audio_packets[right_audio_idx]
+            right_audio_idx += 1
 
-    def match(self, image):
-        matched = np.empty(image.shape, dtype=image.dtype)
-        for channel in range(image.shape[-1]):
-            channel_img = image[..., channel]
-            lookup = channel_img.reshape(-1)
-            counts = np.bincount(lookup)
-            quantiles = np.cumsum(counts) / channel_img.size
-
-            interp_a_values = np.interp(quantiles, self.channel_reference_quantiles[channel], self.channel_reference_values[channel])
-            matched_channel = interp_a_values[lookup].reshape(channel_img.shape)
-            matched[..., channel] = matched_channel
-        return matched
-
-
-class InputProcessor():
-
-    def __init__(self, video_filename):
-        self.video_filename = video_filename
-        self.video_container = None
-        self.packets = None
-        self.frame_iter = None
-        self.frame_idx = 0
-
-        self.timecode = None
-        self.read_video_frames = collections.deque()
-        self.read_audio_frames = collections.deque()
-
-        self._open()
-
-    def _open(self):
-        self.video_container = av.open(self.video_filename)
-        self.packets = self.video_container.demux()
-        self.frame_iter = iter(self.packets)
-
-    def ready(self):
-        return self.timecode is not None
-
-    # def get_video(self, frame_idx):
-    #     while True:
-    #         if len(self.read_video_frames) == 0:
-    #             return None
-
-    #         frame_idx_since_midnight = self.read_video_frames[0].idx + self.index_timecode[0]
-    #         if frame_idx_since_midnight < frame_idx:
-    #             self.read_video_frames.popleft()
-    #         elif frame_idx_since_midnight == frame_idx:
-    #             return self.read_video_frames.popleft()
-    #         else:
-    #             return None
-
-    def pop_video(self):
-        if len(self.read_video_frames) == 0:
-            return None
-        return self.read_video_frames.popleft()
-
-    def pop_audio(self):
-        if len(self.read_audio_frames) == 0:
-            return None
-        return self.read_audio_frames.popleft()
-
-    def next(self):
-        packet = None
-        try:
-            packet = next(self.frame_iter)
-        except StopIteration:
-            return False
-        self._process_packet(packet)
-        return True
-
-    def _process_packet(self, packet):
-        raw_frames = packet.decode()
-        if packet.stream.type == 'data':
-            if packet.stream.name is None:
-                # raw_bytes = bytes(packet)
-                # https://github.com/gopro/gpmf-parser
-                # Raw data to be stored in Big Endian
-                # frame_from_midnight = int.from_bytes(raw_bytes, "big")  # Skipping because of bad sync
-                frame_from_midnight = 0
-                self.timecode = frame_from_midnight
-        elif packet.stream.type == 'video':
-            for raw_frame in raw_frames:
-                self.read_video_frames.append(raw_frame)
-                self.frame_idx += 1
-        elif packet.stream.type == 'audio':
-            for raw_frame in raw_frames:
-                self.read_audio_frames.append(raw_frame)
-        else:
-            logger.warning(f"Unhandled stream type: {packet.stream.type}")
-
-    def close(self):
-        if self.video_container:
-            self.video_container.close()
-            self.video_container = None
+    return video_idx, left_audio_idx, right_audio_idx
 
 
 def main():
     parser = argparse.ArgumentParser(description='Run detection on hockey broadcast videos.')
+    parser.add_argument("--jobs", type=int, help="Number of workers.")
     parser.add_argument("--left", type=str, help="Left videos")
     parser.add_argument("--right", type=str, help="Right videos")
     parser.add_argument("-o", "--output", type=str, required=True, help="output")
@@ -144,19 +57,30 @@ def main():
     left_video_filename = args.left
     right_video_filename = args.right
     output_filename = args.output
+    nb_workers = args.jobs
     output_width = 7060
     output_height = 2400
+    crop_x = 670
+    crop_y = 385
 
-    left_processor = InputProcessor(left_video_filename)
-    right_processor = InputProcessor(right_video_filename)
+    logger.info("Setting up input processors")
+    left_queue = multiprocessing.Queue(maxsize=10)
+    left_processor = multiprocessing.Process(target=process_input, args=(left_video_filename, left_queue))
+    # left_processor = threading.Thread(target=process_input, args=(left_video_filename, left_queue))
+    right_queue = multiprocessing.Queue(maxsize=10)
+    right_processor = multiprocessing.Process(target=process_input, args=(right_video_filename, right_queue))
+    # right_processor = threading.Thread(target=process_input, args=(right_video_filename, right_queue))
+    left_processor.start()
+    right_processor.start()
 
-    process_left = True
-    process_right = True
-    frame_idx_since_midnight = None
+    video_queue = multiprocessing.Queue(maxsize=10)
+    left_audio_queue = multiprocessing.Queue(maxsize=10)
+    right_audio_queue = multiprocessing.Queue(maxsize=10)
+    stop_encoding = multiprocessing.Value(c_bool, False)
+    output_processor = multiprocessing.Process(target=process_output, args=(output_filename, output_width, output_height, stop_encoding, video_queue, left_audio_queue, right_audio_queue))
+    output_processor.start()
 
-    left_frame = None
-    right_frame = None
-    match_histograms = None
+    logger.info("Setting up camera params")
     camera_left = cv2.detail.CameraParams()
     camera_left.focal = 1380.9097896938035
     camera_left.aspect = 1.0
@@ -173,87 +97,122 @@ def main():
     camera_right.R = np.array([[9.7996306e-01, 5.6246426e-02, 1.9107229e-01], [2.2138309e-08, 9.5929933e-01, -2.8239137e-01], [-1.9917902e-01, 2.7673310e-01, 9.4007784e-01]], dtype=np.float32)
     camera_right.t = np.array([[0.], [0.], [0.]], dtype=np.float64)
 
-    camera_params = [camera_left, camera_right]
-    # camera_params = None
+    left_video_packets = dict()
+    left_audio_packets = dict()
+    right_video_packets = dict()
+    right_audio_packets = dict()
 
-    with av.open(output_filename, mode='w') as output_container:
-        options = {"crf": str(23)}
-        output_video_stream = output_container.add_stream('libx264')
-        output_video_stream.options = options
-        output_video_stream.width = output_width
-        output_video_stream.height = output_height
-        output_video_stream.pix_fmt = 'yuvj420p'
-        output_video_stream.time_base = fractions.Fraction(1, 60000)
-        output_audio_stream_left = output_container.add_stream('aac', rate=48000)
-        output_audio_stream_left.metadata['title'] = 'Left'
-        output_audio_stream_right = output_container.add_stream('aac', rate=48000)
-        output_audio_stream_right.metadata['title'] = 'Right'
+    logger.info("Finding reference image for white balance correction")
+    reference_image = None
+    while reference_image is None:
+        packet = left_queue.get()
+        if packet.type == InputPacketType.AUDIO:
+            left_audio_packets[packet.idx] = packet
+        elif packet.type == InputPacketType.VIDEO:
+            left_video_packets[packet.idx] = packet
+            if packet.idx == 0:
+                reference_image = packet.data
 
-        start_time = time.time()
-        while process_left and process_right:
-            if process_left:
-                process_left = left_processor.next()
-            if process_right:
-                process_right = right_processor.next()
+    logger.info(f"Starting {nb_workers} panorama stitchers")
+    worker_processes = list()
+    stop_workers = multiprocessing.Value(c_bool, False)
 
-            if frame_idx_since_midnight is None and left_processor.ready() and right_processor.ready():
-                if left_processor.timecode >= right_processor.timecode:
-                    frame_idx_since_midnight = left_processor.timecode
-                if left_processor.timecode < right_processor.timecode:
-                    frame_idx_since_midnight = right_processor.timecode
+    panorama_queue = multiprocessing.Queue(maxsize=30)
+    stitch_queue = multiprocessing.Queue(maxsize=15)
+    for i in range(nb_workers):
+        args = (stitch_queue, panorama_queue, stop_workers, reference_image, camera_left, camera_right, crop_x, crop_y, output_width, output_height)
+        p = multiprocessing.Process(target=stitch_frames, args=args)
+        # p = threading.Thread(target=stitch_frames, args=args)
+        p.start()
+        worker_processes.append(p)
+    panoramas = dict()
 
-            if frame_idx_since_midnight is not None:
-                if left_frame is None:
-                    left_frame = left_processor.pop_video()
-                if right_frame is None:
-                    right_frame = right_processor.pop_video()
+    logger.info(f"Setting up output video {output_filename}")
 
-                if left_frame is not None and right_frame is not None:
-                    left_image = left_frame.to_ndarray(format='bgr24')
-                    right_image = right_frame.to_ndarray(format='bgr24')
-                    frame_idx_since_midnight += 1
+    start_time = time.time()
+    last_video_idx_throughput = 0
+    video_idx = 0
+    left_audio_idx = 0
+    right_audio_idx = 0
+    last_left_video_idx = -1
+    last_right_video_idx = -1
 
-                    throughput = frame_idx_since_midnight / (time.time()-start_time)
-                    logger.info(f"Read frames: {frame_idx_since_midnight} {throughput:0.2f}")
+    last_video_idx = None
+    logger.info("Starting process loop")
+    while left_processor.is_alive() or right_processor.is_alive():
+        while not left_queue.empty():
+            packet = left_queue.get()
+            if packet.type == InputPacketType.AUDIO:
+                left_audio_packets[packet.idx] = packet
+            elif packet.type == InputPacketType.VIDEO:
+                left_video_packets[packet.idx] = packet
+                if packet.idx > last_left_video_idx:
+                    last_left_video_idx = packet.idx
+        while not right_queue.empty():
+            packet = right_queue.get()
+            if packet.type == InputPacketType.AUDIO:
+                right_audio_packets[packet.idx] = packet
+            elif packet.type == InputPacketType.VIDEO:
+                right_video_packets[packet.idx] = packet
+                if packet.idx > last_right_video_idx:
+                    last_right_video_idx = packet.idx
 
-                    if match_histograms is None:
-                        match_histograms = MatchHistogram(left_image)
+        if not left_processor.is_alive() and not right_processor.is_alive():
+            last_video_idx = last_right_video_idx
+            if last_left_video_idx < last_right_video_idx:
+                last_video_idx = last_left_video_idx
+        elif not left_processor.is_alive():
+            last_video_idx = last_left_video_idx
+        elif not right_processor.is_alive():
+            last_video_idx = last_right_video_idx
 
-                    pano, camera_params = fix_and_stitch(match_histograms, left_image, right_image, camera_params)
-                    pano = pano[385:385+output_height, 670:670+output_width]
-                    av_videoframe = av.VideoFrame.from_ndarray(pano, format='bgr24')
-                    av_videoframe.pts = left_frame.pts
-                    new_packet = output_video_stream.encode(av_videoframe)
-                    output_container.mux(new_packet)
+        idx_to_delete = list()
+        for k, v in left_video_packets.items():
+            if k in right_video_packets:
+                idx_to_delete.append(k)
+                frame_data = FrameParts(left=v.data, right=right_video_packets[k].data, idx=k, pts=v.pts)
+                stitch_queue.put(frame_data)
 
-                    # scale = 0.1
-                    # cv2.imshow("Pano", cv2.resize(pano, (int(pano.shape[1]*scale), int(pano.shape[0]*scale))))
-                    # cv2.imshow("Left", cv2.resize(left_image, (1280, 720)))
-                    # cv2.imshow("Right", cv2.resize(right_image, (1280, 720)))
-                    # cv2.waitKey()
-                    # cv2.destroyAllWindows()
-                    left_frame = None
-                    right_frame = None
+        # Clean up queues past last frame
+        if last_video_idx is not None:
+            for k in left_video_packets:
+                if k > last_video_idx:
+                    idx_to_delete.append(k)
+            for k in right_video_packets:
+                if k > last_video_idx:
+                    idx_to_delete.append(k)
+        for k in idx_to_delete:
+            if k in left_video_packets:
+                del left_video_packets[k]
+            if k in right_video_packets:
+                del right_video_packets[k]
 
-            while True:
-                audio_frame = left_processor.pop_audio()
-                if audio_frame is None:
-                    break
-                new_packet = output_audio_stream_left.encode(audio_frame)
-                output_container.mux(new_packet)
+        video_idx, left_audio_idx, right_audio_idx = handle_final_data(video_queue, left_audio_queue, right_audio_queue, panorama_queue, panoramas, left_audio_packets, right_audio_packets, video_idx, left_audio_idx, right_audio_idx)
 
-            while True:
-                audio_frame = right_processor.pop_audio()
-                if audio_frame is None:
-                    break
-                new_packet = output_audio_stream_right.encode(audio_frame)
-                output_container.mux(new_packet)
-        output_container.mux(output_video_stream.encode())
-        output_container.mux(output_audio_stream_left.encode())
-        output_container.mux(output_audio_stream_right.encode())
+        if video_idx >= last_video_idx_throughput+5:
+            last_video_idx_throughput = video_idx
+            throughput = video_idx / (time.time()-start_time)
+            logger.info(f"Processed frame: {video_idx} {throughput:0.2f}")
 
-    left_processor.close()
-    right_processor.close()
+        # scale = 0.1
+        # cv2.imshow("Pano", cv2.resize(pano, (int(pano.shape[1]*scale), int(pano.shape[0]*scale))))
+        # cv2.imshow("Left", cv2.resize(left_image, (1280, 720)))
+        # cv2.imshow("Right", cv2.resize(right_image, (1280, 720)))
+        # cv2.waitKey()
+        # cv2.destroyAllWindows()
+    left_processor.join()
+    right_processor.join()
+    while video_idx != last_video_idx:
+        video_idx, left_audio_idx, right_audio_idx = handle_final_data(video_queue, left_audio_queue, right_audio_queue, panorama_queue, panoramas, left_audio_packets, right_audio_packets, video_idx, left_audio_idx, right_audio_idx)
+    throughput = video_idx / (time.time()-start_time)
+    logger.info(f"Processed final frame: {video_idx} {throughput:0.2f}")
+
+    stop_workers.value = True
+    for worker in worker_processes:
+        worker.join()
+
+    stop_encoding.value = True
+    output_processor.join()
 
 
 def print_camera_params(camera):
@@ -265,35 +224,6 @@ def print_camera_params(camera):
     print(camera.R.dtype)
     print(camera.t)
     print(camera.t.dtype)
-
-
-def fix_and_stitch(match_histograms, left_frame, right_frame, camera_params):
-    # right_frame = exposure.match_histograms(right_frame, left_frame, multichannel=True)
-    right_frame = match_histograms.match(right_frame)
-
-    pano = None
-    stitcher = cv2.Stitcher.create(cv2.Stitcher_PANORAMA)
-    if camera_params is None:
-        status, pano = stitcher.stitch([left_frame, right_frame])
-        if status != cv2.Stitcher_OK:
-            raise RuntimeError("Can't stitch images, error code = %d" % status)
-
-        camera_params = list()
-        c1 = stitcher.cameras(0)
-        c2 = stitcher.cameras(1)
-
-        # print_camera_params(c1)
-        # print_camera_params(c2)
-
-        camera_params.append(c1)
-        camera_params.append(c2)
-    else:
-        stitcher.setTransformCams([left_frame, right_frame], camera_params[0], camera_params[1])
-        status, pano = stitcher.composePanorama([left_frame, right_frame])
-        if status != cv2.Stitcher_OK:
-            raise RuntimeError("Can't compose images, error code = %d" % status)
-
-    return pano, camera_params
 
 
 if __name__ == '__main__':
