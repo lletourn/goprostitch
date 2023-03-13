@@ -17,24 +17,24 @@ from goprostitch.outputwriter import process_output
 logger = logging.getLogger(__name__)
 
 
-def handle_final_data(video_queue, left_audio_queue, right_audio_queue, panorama_queue, panoramas, left_audio_packets, right_audio_packets, video_idx, left_audio_idx, right_audio_idx):
+def handle_final_data(out_video_queue, out_left_audio_queue, out_right_audio_queue, panorama_queue, panoramas, left_audio_packets, right_audio_packets, video_idx, left_audio_idx, right_audio_idx):
     while not panorama_queue.empty():
         panorama = panorama_queue.get()
         panoramas[panorama.idx] = panorama
 
     while video_idx in panoramas or left_audio_idx in left_audio_packets or right_audio_idx in right_audio_packets:
         if video_idx in panoramas:
-            video_queue.put(panoramas[video_idx])
+            out_video_queue.put(panoramas[video_idx])
             del panoramas[video_idx]
             video_idx += 1
 
         if left_audio_idx in left_audio_packets:
-            left_audio_queue.put(left_audio_packets[left_audio_idx])
+            out_left_audio_queue.put(left_audio_packets[left_audio_idx])
             del left_audio_packets[left_audio_idx]
             left_audio_idx += 1
 
         if right_audio_idx in right_audio_packets:
-            right_audio_queue.put(right_audio_packets[right_audio_idx])
+            out_right_audio_queue.put(right_audio_packets[right_audio_idx])
             del right_audio_packets[right_audio_idx]
             right_audio_idx += 1
 
@@ -73,11 +73,11 @@ def main():
     left_processor.start()
     right_processor.start()
 
-    video_queue = multiprocessing.Queue(maxsize=10)
-    left_audio_queue = multiprocessing.Queue(maxsize=10)
-    right_audio_queue = multiprocessing.Queue(maxsize=10)
+    out_video_queue = multiprocessing.Queue(maxsize=10)
+    out_left_audio_queue = multiprocessing.Queue(maxsize=10)
+    out_right_audio_queue = multiprocessing.Queue(maxsize=10)
     stop_encoding = multiprocessing.Value(c_bool, False)
-    output_processor = multiprocessing.Process(target=process_output, args=(output_filename, output_width, output_height, stop_encoding, video_queue, left_audio_queue, right_audio_queue))
+    output_processor = multiprocessing.Process(target=process_output, args=(output_filename, output_width, output_height, stop_encoding, out_video_queue, out_left_audio_queue, out_right_audio_queue))
     output_processor.start()
 
     logger.info("Setting up camera params")
@@ -139,7 +139,10 @@ def main():
 
     last_video_idx = None
     logger.info("Starting process loop")
+
+    time_deltas = list()
     while left_processor.is_alive() or right_processor.is_alive():
+        total_time = time.time()
         while not left_queue.empty():
             packet = left_queue.get()
             if packet.type == InputPacketType.AUDIO:
@@ -157,6 +160,7 @@ def main():
                 if packet.idx > last_right_video_idx:
                     last_right_video_idx = packet.idx
 
+        processing_time_start = time.time()
         if not left_processor.is_alive() and not right_processor.is_alive():
             last_video_idx = last_right_video_idx
             if last_left_video_idx < last_right_video_idx:
@@ -187,12 +191,26 @@ def main():
             if k in right_video_packets:
                 del right_video_packets[k]
 
-        video_idx, left_audio_idx, right_audio_idx = handle_final_data(video_queue, left_audio_queue, right_audio_queue, panorama_queue, panoramas, left_audio_packets, right_audio_packets, video_idx, left_audio_idx, right_audio_idx)
+        bef_handler = time.time()
+        video_idx, left_audio_idx, right_audio_idx = handle_final_data(out_video_queue, out_left_audio_queue, out_right_audio_queue, panorama_queue, panoramas, left_audio_packets, right_audio_packets, video_idx, left_audio_idx, right_audio_idx)
+        aft_handler = time.time()
 
-        if video_idx >= last_video_idx_throughput+5:
+        time_deltas.append([bef_handler-processing_time_start, aft_handler-processing_time_start, aft_handler-total_time])
+        if video_idx >= last_video_idx_throughput+60:  # 60 == ~1 frame
             last_video_idx_throughput = video_idx
             throughput = video_idx / (time.time()-start_time)
-            logger.info(f"Processed frame: {video_idx} {throughput:0.2f}")
+            logger.info(f"Processed frame: {video_idx} {throughput:0.2f} ILeft: {left_queue.qsize()} IRight: {right_queue.qsize()} IStitch: {stitch_queue.qsize()} OPano: {panorama_queue.qsize()} OVideo: {out_video_queue.qsize()} OLeft: {out_left_audio_queue.qsize()} ORight: {out_right_audio_queue.qsize()}")
+
+            bef = 0.0
+            aft = 0.0
+            tot = 0.0
+            for a in time_deltas:
+                bef += a[0]
+                aft += a[1]
+                tot += a[2]
+            nb = len(time_deltas)
+            logger.debug(f"Before: {bef / nb:0.3f} After: {aft / nb:0.3f} Total: {tot / nb:0.3f}")
+            time_deltas.clear()
 
         # scale = 0.1
         # cv2.imshow("Pano", cv2.resize(pano, (int(pano.shape[1]*scale), int(pano.shape[0]*scale))))
@@ -203,7 +221,7 @@ def main():
     left_processor.join()
     right_processor.join()
     while video_idx != last_video_idx:
-        video_idx, left_audio_idx, right_audio_idx = handle_final_data(video_queue, left_audio_queue, right_audio_queue, panorama_queue, panoramas, left_audio_packets, right_audio_packets, video_idx, left_audio_idx, right_audio_idx)
+        video_idx, left_audio_idx, right_audio_idx = handle_final_data(out_video_queue, out_left_audio_queue, out_right_audio_queue, panorama_queue, panoramas, left_audio_packets, right_audio_packets, video_idx, left_audio_idx, right_audio_idx)
     throughput = video_idx / (time.time()-start_time)
     logger.info(f"Processed final frame: {video_idx} {throughput:0.2f}")
 
