@@ -4,10 +4,116 @@
 #include <iostream>
 #include <spdlog/spdlog.h>
 
+#include <opencv2/opencv.hpp>
+#include <opencv2/stitching.hpp>
+#include <csignal>
 using namespace std;
+using namespace cv;
 
-FrameStitcher::FrameStitcher(ThreadSafeQueue<InputPacket>& input_packets, uint32_t max_queue_size);
-: input_packets_(input_packets), running_(false), done_(false), output_audio_packets_(max_queue_size), output_video_packets_(max_queue_size) {
+void FrameStitcher::BuildReferenceHistogram(const Mat& reference_image, vector<vector<uint32_t>>& bgr_value_idxs, vector<vector<double>>& bgr_cumsum) {
+    vector<Mat> bgr_planes;
+    split(reference_image, bgr_planes);
+
+    int histSize = 256;
+    float range[] = { 0, 256 }; //the upper boundary is exclusive
+    const float* histRange[] = { range };
+
+    vector<Mat> bgr_hists(3);
+    bgr_value_idxs.clear();
+    bgr_cumsum.clear();
+    for(uint32_t i=0; i < bgr_planes.size(); ++i) {
+        bgr_value_idxs.push_back(vector<uint32_t>());
+        bgr_cumsum.push_back(vector<double>());
+
+        calcHist(&bgr_planes[i], 1, 0, Mat(), bgr_hists[i], 1, &histSize, histRange, true, false);
+        assert(bgr_hists[i].type() == CV_32F);
+
+        uint32_t cumulative_sum = 0;
+        for(uint32_t j=0; j < histSize; ++j) {
+            uint32_t value = (uint32_t)bgr_hists[i].at<float>(j);
+            if(value > 0) {
+                bgr_value_idxs[i].push_back(j);
+                cumulative_sum += value;
+                double quantile = ((double)cumulative_sum) / ((double)bgr_planes[i].total());
+                bgr_cumsum[i].push_back(quantile);
+            }
+        }
+    }
+}
+
+void FrameStitcher::interp(const vector<double>& x, const vector<double>& xp, const vector<uint32_t>& yp, vector<uint8_t>& y) {
+    y.resize(x.size());
+	
+	int ip = 0;
+	int ip_next = 1;
+	int i = 0;
+
+	while(i < x.size()){
+        // compute slope between the 2 cumsum points where ip == x values(pixel value) quantiles == y values
+		double m = (yp[ip_next]-yp[ip])/(xp[ip_next]-xp[ip]);
+		double q = yp[ip] - m * xp[ip];
+		while(x[i]<xp[ip_next]){
+			if(x[i]>=xp[ip])
+				y[i] = m*x[i]+q;
+			i +=1;
+			if (i >= x.size())
+                break;
+		}
+
+		ip +=1;
+		ip_next +=1;
+		if(ip_next == xp.size()){
+			while(i < x.size()){
+				y[i] = yp.back();
+				i++;
+			}
+			break;
+		}
+	}
+}
+
+void FrameStitcher::MatchHistograms(Mat& image) {
+    vector<Mat> bgr_planes;
+    split(image, bgr_planes);
+
+    int histSize = 256;
+    float range[] = { 0, 256 }; //the upper boundary is exclusive
+    const float* histRange[] = { range };
+
+    
+    vector<Mat> bgr_hists(3);
+    vector<uint8_t> interp_a_values;
+    for(uint32_t i=0; i < bgr_planes.size(); ++i) {
+        calcHist(&bgr_planes[i], 1, 0, Mat(), bgr_hists[i], 1, &histSize, histRange, true, false);
+
+        vector<uint32_t> bgr_value_idxs;
+        vector<double> bgr_cumsum;
+        uint32_t cumulative_sum = 0;
+        for(uint32_t j=0; j < histSize; ++j) {
+            uint32_t value = (uint32_t)bgr_hists[i].at<float>(j);
+            bgr_value_idxs.push_back(j);
+            cumulative_sum += value;
+            double quantile = ((double)cumulative_sum) / ((double)bgr_planes[i].total());
+            bgr_cumsum.push_back(quantile);
+        }
+
+        // Interpolate cumulative sum curve from image to reference curve to pixel value
+        // https://en.wikipedia.org/wiki/Histogram_matching
+        // https://scikit-image.org/docs/stable/auto_examples/color_exposure/plot_histogram_matching.html
+        interp(bgr_cumsum, reference_bgr_cumsum_[i], reference_bgr_value_idxs_[i], interp_a_values);
+        for(uint32_t y=0; y < image.rows; ++y) {
+            for(uint32_t x=0; x < image.cols; ++x) {
+                uint8_t pixel = bgr_planes[i].at<uint8_t>(y,x);
+                bgr_planes[i].at<uint8_t>(y,x) = interp_a_values[pixel];
+            }
+        }
+    }
+    merge(bgr_planes, image);
+}
+
+
+FrameStitcher::FrameStitcher(ThreadSafeQueue<LeftRightPacket>& stitcher_queue, ThreadSafeQueue<PanoramicPacket>& output_queue, vector<detail::CameraParams> camera_params, const vector<vector<uint32_t>>& reference_bgr_value_idxs, const vector<vector<double>>& reference_bgr_cumsum, uint32_t max_queue_size)
+: stitcher_queue_(stitcher_queue), output_queue_(output_queue), camera_params_(camera_params), reference_bgr_value_idxs_(reference_bgr_value_idxs), reference_bgr_cumsum_(reference_bgr_cumsum), running_(false), done_(false), output_video_packets_(max_queue_size) {
 }
 
 
@@ -36,8 +142,8 @@ bool FrameStitcher::is_done() {
     return done_.load();
 } 
 
-ThreadSafeQueue<InputPacket>& FrameStitcher::getOutQueue() {
-    return packet_queue_;
+ThreadSafeQueue<PanoramicPacket>& FrameStitcher::getOutPanoramicQueue() {
+    return output_video_packets_;
 }
 
 
@@ -46,261 +152,63 @@ void FrameStitcher::run() {
     pthread_setname_np(pthread_self(), "FrameStitcher");
     #endif
    
+    int32_t panoramic_width = -1;
+    int32_t panoramic_height = -1;
+    vector<Mat> images(2);
+    while(running_) {
+        unique_ptr<LeftRightPacket> left_right_packet(stitcher_queue_.pop(chrono::seconds(1)));
+        if(left_right_packet) {
+            Mat left(left_right_packet->height, left_right_packet->width, CV_8UC3, left_right_packet->left_data.get());
+            Mat right(left_right_packet->height, left_right_packet->width, CV_8UC3, left_right_packet->right_data.get());
+            images[0] = left;
+            images[1] = right;
 
-    const uint32_t ERROR_SIZE = 256;
-    char error[ERROR_SIZE];
-    AVFormatContext* av_format_ctx_;
+            // Mat dstOrg;
+            // resize(images[1], dstOrg, Size(1280, 720), 0, 0, INTER_CUBIC);
+            // cv::imshow("LeftOrg", dstOrg);
+            // MatchHistograms(images[1]);
+            // Mat dst;
+            // resize(images[1], dst, Size(1280, 720), 0, 0, INTER_CUBIC);
+            // cv::imshow("Left", dst);
+            // cv::waitKey();
+            // cv::destroyWindow("Left");
+            // cv::destroyWindow("LeftOrg");
 
-    av_format_ctx_ = avformat_alloc_context();
-    if (!av_format_ctx_) {
-        spdlog::error("Could not allocate context.");
-        throw runtime_error("Error occured");
-    }
 
-    int ret = avformat_open_input(&av_format_ctx_, filename_.c_str(), NULL, NULL);
-    if (ret < 0) {
-        // couldn't open file
-        cerr << "Could not open file " << filename_ << endl;
-        throw runtime_error("Error occured");
-    }
+            Ptr<Stitcher> stitcher(Stitcher::create(Stitcher::PANORAMA));
+            Stitcher::Status status = stitcher->setTransform(images, camera_params_);
+            if (status != Stitcher::OK) {
+                spdlog::error("Can't set transform values: {}", int(status));
+                throw runtime_error("Can't set transform values");
+            }   
 
-    ret = avformat_find_stream_info(av_format_ctx_, NULL);
-    if (ret < 0) {
-        cerr << "Could not find stream information " << filename_ << endl;
-        throw runtime_error("Error occured");
-    }
-    if(spdlog::should_log(spdlog::level::debug))
-        av_dump_format(av_format_ctx_, 0, filename_.c_str(), 0);
+            Mat panoramic_image;
+            stitcher->composePanorama(panoramic_image);
+            if (status != Stitcher::OK) {
+                spdlog::error("Couldn't compose image: {}", int(status));
+                throw runtime_error("Couldn't compose image");
+            }
+            stitcher.release();
 
-    AVCodecContext* video_codec_ctx_orig = NULL;
-    AVCodecContext* video_codec_ctx = NULL;
-    AVCodecContext* audio_codec_ctx_orig = NULL;
-    AVCodecContext* audio_codec_ctx = NULL;
+            unique_ptr<PanoramicPacket> pano_packet(new PanoramicPacket);
+            pano_packet->data_size = panoramic_image.total() * panoramic_image.elemSize();
+            pano_packet->data = unique_ptr<uint8_t>(new uint8_t[pano_packet->data_size]);
 
-    int video_stream = -1;
-    int audio_stream = -1;
-    for (uint32_t i = 0; i < av_format_ctx_->nb_streams; i++) {
-        if (av_format_ctx_->streams[i]->codecpar->codec_type == AVMEDIA_TYPE_VIDEO) {
-            video_stream = i;
+            if(!panoramic_image.isContinuous())
+                panoramic_image = panoramic_image.clone();
+
+            memcpy(pano_packet->data.get(), panoramic_image.data, pano_packet->data_size);
+
+            pano_packet->width = panoramic_image.cols;
+            pano_packet->height = panoramic_image.rows;
+            pano_packet->pts = left_right_packet->pts;
+            pano_packet->pts_time = left_right_packet->pts_time;
+            pano_packet->idx = left_right_packet->idx;
+            left_right_packet.reset();
+
+            output_queue_.push(move(pano_packet));
         }
-        else if (av_format_ctx_->streams[i]->codecpar->codec_type == AVMEDIA_TYPE_AUDIO) {
-            audio_stream = i;
-        }
     }
-
-    AVCodec * video_codec = NULL;
-    video_codec = avcodec_find_decoder(av_format_ctx_->streams[video_stream]->codecpar->codec_id);
-    if (video_codec == NULL) {
-        cerr << "Unsupported video codec!" << endl;
-        throw runtime_error("Error occured");
-    }
-    AVCodec * audio_codec = NULL;
-    audio_codec = avcodec_find_decoder(av_format_ctx_->streams[audio_stream]->codecpar->codec_id);
-    if (audio_codec == NULL) {
-        cerr << "Unsupported audio codec!" << endl;
-        throw runtime_error("Error occured");
-    }
-
-    video_codec_ctx_orig = avcodec_alloc_context3(video_codec);
-    ret = avcodec_parameters_to_context(video_codec_ctx_orig, av_format_ctx_->streams[video_stream]->codecpar);
-    audio_codec_ctx_orig = avcodec_alloc_context3(audio_codec);
-    ret = avcodec_parameters_to_context(audio_codec_ctx_orig, av_format_ctx_->streams[audio_stream]->codecpar);
-
-    video_codec_ctx = avcodec_alloc_context3(video_codec);
-    ret = avcodec_parameters_to_context(video_codec_ctx, av_format_ctx_->streams[video_stream]->codecpar);
-    if (ret != 0) {
-        cerr << "Could not copy video codec context." << endl;
-        throw runtime_error("Error occured");
-    }
-    audio_codec_ctx = avcodec_alloc_context3(audio_codec);
-    ret = avcodec_parameters_to_context(audio_codec_ctx, av_format_ctx_->streams[audio_stream]->codecpar);
-    if (ret != 0) {
-        cerr << "Could not copy audio codec context." << endl;
-        throw runtime_error("Error occured");
-    }
-
-    ret = avcodec_open2(video_codec_ctx, video_codec, NULL);
-    if (ret < 0) {
-        printf("Could not open video codec.\n");
-        throw runtime_error("Error occured");
-    }
-    ret = avcodec_open2(audio_codec_ctx, audio_codec, NULL);
-    if (ret < 0) {
-        printf("Could not open audio codec.\n");
-        throw runtime_error("Error occured");
-    }
-
-    AVFrame *video_frame = nullptr;
-    video_frame = av_frame_alloc();
-    if (video_frame == nullptr) {
-        cerr << "Could not allocate video frame." << endl;
-        throw runtime_error("Error occured");
-    }
-
-    AVFrame * frame_BGR = nullptr;
-    frame_BGR = av_frame_alloc();
-    if (frame_BGR == nullptr) {
-        cerr << "Could not allocate frame" << endl;
-        throw runtime_error("Error occured");
-    }
-
-    AVFrame *audio_frame = nullptr;
-    audio_frame = av_frame_alloc();
-    if (audio_frame == nullptr) {
-        cerr << "Could not allocate audio frame." << endl;
-        throw runtime_error("Error occured");
-    }
-
-    uint8_t* buffer = nullptr;
-    int nb_bytes;
-
-    nb_bytes = av_image_get_buffer_size(AV_PIX_FMT_BGR24, video_codec_ctx->width, video_codec_ctx->height, 32);
-    buffer = new uint8_t[nb_bytes];
-
-    av_image_fill_arrays(
-        frame_BGR->data,
-        frame_BGR->linesize,
-        buffer,
-        AV_PIX_FMT_BGR24,
-        video_codec_ctx->width,
-        video_codec_ctx->height,
-        32
-    );
-
-    struct SwsContext* sws_ctx = nullptr;
-    AVPacket* packet = av_packet_alloc();
-    if (packet == NULL) {
-        cerr << "Could not alloc packet," << endl;
-        throw runtime_error("Error occured");
-    }
-    sws_ctx = sws_getContext(   // [13]
-        video_codec_ctx->width,
-        video_codec_ctx->height,
-        video_codec_ctx->pix_fmt,
-        video_codec_ctx->width,
-        video_codec_ctx->height,
-        AV_PIX_FMT_BGR24,
-        SWS_BILINEAR,
-        NULL,
-        NULL,
-        NULL
-    );
-
-    uint32_t video_idx = 0;
-    uint32_t audio_idx = 0;
-    while (av_read_frame(av_format_ctx_, packet) >= 0) {
-        if (packet->stream_index == video_stream) {
-            ret = avcodec_send_packet(video_codec_ctx, packet);
-            if (ret < 0) {
-                cerr << "Error sending video packet for decoding." << endl;
-                throw runtime_error("Error occured");
-            }
-
-            while (ret >= 0) {
-                ret = avcodec_receive_frame(video_codec_ctx, video_frame);
-                if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF) {
-                    break;
-                } else if (ret < 0) {
-                    cerr << "Error while decoding." << endl;
-                    throw runtime_error("Error occured");
-                }
-
-                // Convert the image from its native format to BGR
-                sws_scale(
-                    sws_ctx,
-                    (uint8_t const * const *)video_frame->data,
-                    video_frame->linesize,
-                    0,
-                    video_codec_ctx->height,
-                    frame_BGR->data,
-                    frame_BGR->linesize
-                );
-
-                //std::raise(SIGINT);
-                uint32_t data_size = av_image_get_buffer_size(AV_PIX_FMT_BGR24, video_codec_ctx->width, video_codec_ctx->height, 1);
-                unique_ptr<uint8_t> data(new uint8_t[data_size]);
-                av_image_copy_to_buffer(data.get(), data_size, frame_BGR->data, frame_BGR->linesize, AV_PIX_FMT_BGR24, video_codec_ctx->width, video_codec_ctx->height, 1);
-
-                unique_ptr<InputPacket> input_packet(new InputPacket);
-                input_packet->type = InputPacket::InputPacketType::VIDEO;
-                input_packet->data_size = data_size;
-                input_packet->data = move(data);
-                input_packet->pts = video_frame->pts;
-                input_packet->idx = video_idx;
-                ++video_idx;
-
-                packet_queue_.push(move(input_packet));
-            }
-        } else if (packet->stream_index == audio_stream) {
-            ret = avcodec_send_packet(audio_codec_ctx, packet);
-            if (ret != AVERROR(EAGAIN) && ret < 0) {
-                av_strerror(ret, error, ERROR_SIZE);
-                cerr << "Error sending audio packet for decoding: " << error << endl;
-                throw runtime_error("Error occured");
-            }
-            while (ret >= 0) {
-                ret = avcodec_receive_frame(video_codec_ctx, audio_frame);
-                if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF) {
-                    break;
-                } else if (ret < 0) {
-                    av_strerror(ret, error, ERROR_SIZE);
-                    cerr << "Error while decoding: " << error << endl;
-                    throw runtime_error("Error occured");
-                }
-                uint32_t data_size = av_samples_get_buffer_size(
-                    NULL,
-                    audio_codec_ctx->channels,
-                    audio_frame->nb_samples,
-                    audio_codec_ctx->sample_fmt,
-                    1
-                );
-
-                unique_ptr<uint8_t> audio_buf(new uint8_t[data_size]);
-                memcpy(audio_buf.get(), audio_frame->data[0], data_size);
-                
-                // const uint32_t channel_name_buf_size = 128;
-                // char* channel_name_buf = new char[channel_name_buf_size];
-                // uint64_t channel_name_actual_size = av_channel_layout_describe (audio_frame->ch_layout, channel_name_buf, channel_name_buf_size)
-                // string channel_name(channel_name_buf, channel_name_actual_size);
-                // delete[] channel_name_buf;
-
-                unique_ptr<InputPacket> input_packet(new InputPacket);
-                input_packet->type = InputPacket::InputPacketType::AUDIO;
-                input_packet->data_size = data_size;
-                input_packet->data = move(audio_buf);
-                input_packet->pts = audio_frame->pts;
-                input_packet->idx = audio_idx;
-                input_packet->format = audio_frame->format;
-                input_packet->layout = audio_frame->channel_layout;
-                input_packet->sample_rate = audio_frame->sample_rate;
-                ++audio_idx;
-
-                packet_queue_.push(move(input_packet));
-            }
-
-        }
-        av_packet_unref(packet);
-    }
-
-    // Free the RGB image
-    av_free(buffer);
-    av_frame_free(&frame_BGR);
-    av_free(frame_BGR);
-
-    // Free the YUV frame
-    av_frame_free(&video_frame);
-    av_free(video_frame);
-    av_frame_free(&audio_frame);
-    av_free(audio_frame);
-
-    // Close the codecs
-    avcodec_close(video_codec_ctx);
-    avcodec_close(video_codec_ctx_orig);
-    avcodec_close(audio_codec_ctx);
-    avcodec_close(audio_codec_ctx_orig);
-
-    // Close the video file
-    avformat_close_input(&av_format_ctx_);
-
     done_ = true;
+
 }

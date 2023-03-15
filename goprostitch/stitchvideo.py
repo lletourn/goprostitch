@@ -9,6 +9,7 @@ import time
 
 from goprostitch.framestitcher import FrameParts
 from goprostitch.framestitcher import stitch_frames
+from goprostitch.framestitcher import MatchHistogram
 from goprostitch.inputprocessor import InputPacketType
 from goprostitch.inputprocessor import process_input
 from goprostitch.outputwriter import process_output
@@ -112,6 +113,7 @@ def main():
             left_video_packets[packet.idx] = packet
             if packet.idx == 0:
                 reference_image = packet.data
+    MatchHistogram(reference_image)
 
     logger.info(f"Starting {nb_workers} panorama stitchers")
     worker_processes = list()

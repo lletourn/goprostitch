@@ -6,28 +6,52 @@
 #include <spdlog/spdlog.h>
 #include <opencv2/opencv.hpp>
 
+#include "framestitcher.hpp"
 #include "inputprocessor.hpp"
+#include "outputencoder.hpp"
 
 using namespace std;
 using namespace cv;
 
 vector<detail::CameraParams> buildCamParams() {
     spdlog::info("Setting up camera params");
+    Mat left_R(3, 3, CV_32F);
+    left_R.at<float>(0,0) = 0.98906273;
+    left_R.at<float>(0,1) = -0.076125443;
+    left_R.at<float>(0,2) = -0.12633191;
+    left_R.at<float>(1,0) = -5.9456329e-10;
+    left_R.at<float>(1,1) = 0.85651541;
+    left_R.at<float>(1,2) = -0.51612151;
+    left_R.at<float>(2,0) = 0.1474952;
+    left_R.at<float>(2,1) = 0.51047659;
+    left_R.at<float>(2,2) = 0.84714752;
+
     detail::CameraParams  camera_left;
-    camera_left.focal = 1380.9097896938035;
+    camera_left.focal = 2137.88;
     camera_left.aspect = 1.0;
     camera_left.ppx = 516.5;
     camera_left.ppy = 290.5;
-    camera_left.R = Mat_<double>(3,3) << 9.7980595e-01, -5.8920074e-02, -1.9107230e-01, -9.6140185e-10,  9.5559806e-01, -2.9467332e-01, 1.9995050e-01, 2.8872266e-01, 9.3630064e-01;
-    camera_left.t = Mat_<double>(3,1) << 0., 0., 0.;
+    camera_left.R = left_R;
+    camera_left.t = Mat::zeros(3, 1, CV_64F);
+
+    Mat right_R(3, 3, CV_32F);
+    right_R.at<float>(0,0) = 0.98918295;
+    right_R.at<float>(0,1) = 0.074548103;
+    right_R.at<float>(0,2) = 0.12633191;
+    right_R.at<float>(1,0) = -1.2479756e-08;
+    right_R.at<float>(1,1) = 0.86123264;
+    right_R.at<float>(1,2) = -0.50821096;
+    right_R.at<float>(2,0) = -0.1466873;
+    right_R.at<float>(2,1) = 0.50271362;
+    right_R.at<float>(2,2) = 0.85191655;
 
     detail::CameraParams camera_right;
-    camera_right.focal = 1384.4108312478572;
+    camera_right.focal = 2119.94;
     camera_right.aspect = 1.0;
     camera_right.ppx = 516.5;
     camera_right.ppy = 290.5;
-    camera_right.R = Mat_<double>(3,3) << 9.7996306e-01, 5.6246426e-02, 1.9107229e-01, 2.2138309e-08, 9.5929933e-01, -2.8239137e-01, -1.9917902e-01, 2.7673310e-01, 9.4007784e-01;
-    camera_right.t = Mat_<double>(3,1) << 0., 0., 0.;
+    camera_right.R = right_R;
+    camera_right.t = Mat::zeros(3, 1, CV_64F);
 
     vector<detail::CameraParams> camera_params;
     camera_params.push_back(camera_left);
@@ -36,10 +60,9 @@ vector<detail::CameraParams> buildCamParams() {
 }
 
 
-void handle_packet(unique_ptr<InputPacket> packet, unordered_map<uint32_t, unique_ptr<InputPacket>>& packets) {
+void handle_packet(unique_ptr<InputPacket> packet, ThreadSafeQueue<InputPacket>& audio_queue, unordered_map<uint32_t, unique_ptr<InputPacket>>& packets) {
     if (packet->type == InputPacket::InputPacketType::AUDIO) {
-        // push to encoder
-        packet.reset();
+        audio_queue.push(move(packet));
     } else {
         //packets.emplace(packet->idx, packet);
         packets.insert(make_pair(packet->idx, move(packet)));
@@ -53,12 +76,23 @@ int main(int argc, const char ** argv) {
 
     string left_filename(argv[1]);
     string right_filename(argv[2]);
+    string output_filename(argv[3]);
+    uint16_t nb_workers(atoi(argv[4]));
+
     spdlog::info("Loading file: {}", left_filename);
     spdlog::info("Loading file: {}", right_filename);
     InputProcessor left_processor(left_filename, 60);
     InputProcessor right_processor(right_filename, 60);
     left_processor.start();
     right_processor.start();
+
+    spdlog::info("Writting file: {}", output_filename);
+    OutputEncoder output_encoder(output_filename, 60);
+    output_encoder.start();
+
+    ThreadSafeQueue<LeftRightPacket> stitcher_queue(40);
+
+    vector<detail::CameraParams> camera_params = buildCamParams();
 
     unordered_map<uint32_t, unique_ptr<InputPacket>> left_video_packets;
     unordered_map<uint32_t, unique_ptr<InputPacket>> right_video_packets;
@@ -68,7 +102,7 @@ int main(int argc, const char ** argv) {
     while(reference_image.data == nullptr) {
         unique_ptr<InputPacket> left_input_packet(left_processor.getOutQueue().pop(chrono::seconds(1)));
         if(left_input_packet) {
-            handle_packet(move(left_input_packet), left_video_packets);
+            handle_packet(move(left_input_packet), output_encoder.getInLeftAudioQueue(), left_video_packets);
             if(left_video_packets.size() > 0) {
                 auto iter = left_video_packets.cbegin();
                 spdlog::debug("Img sizes: {} vs {}", (iter->second->height * iter->second->width * 3), iter->second->data_size);
@@ -77,7 +111,16 @@ int main(int argc, const char ** argv) {
             }
         }
     }
+    vector<vector<uint32_t>> reference_bgr_value_idxs;
+    vector<vector<double>> reference_bgr_cumsum;
+    FrameStitcher::BuildReferenceHistogram(reference_image, reference_bgr_value_idxs, reference_bgr_cumsum);
 
+    vector<unique_ptr<FrameStitcher>> frame_stitchers;
+    for(uint16_t i=0; i < nb_workers; ++i) {
+        unique_ptr<FrameStitcher> fs(new FrameStitcher(stitcher_queue, output_encoder.getInPanoramicQueue(), camera_params, reference_bgr_value_idxs, reference_bgr_cumsum, 10));
+        fs->start();
+        frame_stitchers.push_back(move(fs));
+    }
 
     int32_t last_video_idx = numeric_limits<int32_t>::max();
     double last_video_frame_time = 0;
@@ -96,16 +139,7 @@ int main(int argc, const char ** argv) {
             read_left = true;
             last_left_video_idx = left_input_packet->idx;
             last_left_video_time = left_input_packet->pts_time;
-            handle_packet(move(left_input_packet), left_video_packets);
-            /*
-            cv::Mat left_mat = cv::Mat(left_input_packet->height, left_input_packet->width, CV_8UC3, left_input_packet->data.get());
-            Mat dst;
-            resize(left_mat, dst, Size(1280, 720), 0, 0, INTER_CUBIC);
-            cv::imshow("Left", dst);
-            cv::waitKey();
-            cv::destroyWindow("Left");
-            left_input_packet.reset();
-            */
+            handle_packet(move(left_input_packet), output_encoder.getInLeftAudioQueue(), left_video_packets);
         }
 
         unique_ptr<InputPacket> right_input_packet(right_processor.getOutQueue().pop(chrono::seconds(1)));
@@ -113,7 +147,7 @@ int main(int argc, const char ** argv) {
             read_right = true;
             last_right_video_idx = right_input_packet->idx;
             last_right_video_time = right_input_packet->pts_time;
-            handle_packet(move(right_input_packet), right_video_packets);
+            handle_packet(move(right_input_packet), output_encoder.getInRightAudioQueue(), right_video_packets);
         }
 
         if(left_processor.is_done() && left_processor.getOutQueue().size() == 0 && (last_left_video_idx < last_video_idx)) {
@@ -141,7 +175,20 @@ int main(int argc, const char ** argv) {
         }
 
         while(left_video_packets.find(idx_to_process) != left_video_packets.end() && right_video_packets.find(idx_to_process) != right_video_packets.end()) {
-            spdlog::info("Found frame match: {} vs {}", left_video_packets.find(idx_to_process)->second->pts_time, right_video_packets.find(idx_to_process)->second->pts_time);
+            unique_ptr<LeftRightPacket> lr_packet(new LeftRightPacket());
+            
+            lr_packet->left_data_size = left_video_packets[idx_to_process]->data_size;
+            lr_packet->left_data = move(left_video_packets[idx_to_process]->data);
+            lr_packet->right_data_size = right_video_packets[idx_to_process]->data_size;
+            lr_packet->right_data = move(right_video_packets[idx_to_process]->data);
+            lr_packet->width = left_video_packets[idx_to_process]->width;
+            lr_packet->height = left_video_packets[idx_to_process]->height;
+            lr_packet->pts = left_video_packets[idx_to_process]->pts;
+            lr_packet->pts_time = left_video_packets[idx_to_process]->pts_time;
+            lr_packet->idx = left_video_packets[idx_to_process]->idx;
+
+            stitcher_queue.push(move(lr_packet));
+
             left_video_packets.erase(idx_to_process);
             right_video_packets.erase(idx_to_process);
             ++idx_to_process;
@@ -153,5 +200,11 @@ int main(int argc, const char ** argv) {
     }
     left_processor.stop();
     right_processor.stop();
+
+    for(unique_ptr<FrameStitcher>& fs : frame_stitchers) {
+        fs->stop();
+    }
+
+    output_encoder.stop();
     spdlog::info("Done");
 }
