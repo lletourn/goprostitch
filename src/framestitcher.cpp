@@ -10,8 +10,12 @@
 using namespace std;
 using namespace cv;
 
-void FrameStitcher::BuildReferenceHistogram(const Mat& reference_image, vector<vector<uint32_t>>& bgr_value_idxs, vector<vector<double>>& bgr_cumsum) {
+void FrameStitcher::BuildReferenceHistogram(uint8_t* reference_data, uint32_t width, uint32_t height, vector<vector<uint32_t>>& bgr_value_idxs, vector<vector<double>>& bgr_cumsum) {
     vector<Mat> bgr_planes;
+    Mat ref_yuv(height * 3/2, width, CV_8UC1, reference_data);
+    Mat reference_image;
+    cvtColor(ref_yuv, reference_image, COLOR_YUV2BGR_NV12);
+
     split(reference_image, bgr_planes);
 
     int histSize = 256;
@@ -112,8 +116,8 @@ void FrameStitcher::MatchHistograms(Mat& image) {
 }
 
 
-FrameStitcher::FrameStitcher(ThreadSafeQueue<LeftRightPacket>& stitcher_queue, ThreadSafeQueue<PanoramicPacket>& output_queue, vector<detail::CameraParams> camera_params, const vector<vector<uint32_t>>& reference_bgr_value_idxs, const vector<vector<double>>& reference_bgr_cumsum, uint32_t max_queue_size)
-: stitcher_queue_(stitcher_queue), output_queue_(output_queue), camera_params_(camera_params), reference_bgr_value_idxs_(reference_bgr_value_idxs), reference_bgr_cumsum_(reference_bgr_cumsum), running_(false), done_(false), output_video_packets_(max_queue_size) {
+FrameStitcher::FrameStitcher(uint32_t crop_width, uint32_t crop_height, ThreadSafeQueue<LeftRightPacket>& stitcher_queue, ThreadSafeQueue<PanoramicPacket>& output_queue, vector<detail::CameraParams> camera_params, const vector<vector<uint32_t>>& reference_bgr_value_idxs, const vector<vector<double>>& reference_bgr_cumsum)
+: crop_width_(crop_width), crop_height_(crop_height), stitcher_queue_(stitcher_queue), output_queue_(output_queue), camera_params_(camera_params), reference_bgr_value_idxs_(reference_bgr_value_idxs), reference_bgr_cumsum_(reference_bgr_cumsum), running_(false), done_(false) {
 }
 
 
@@ -142,11 +146,6 @@ bool FrameStitcher::is_done() {
     return done_.load();
 } 
 
-ThreadSafeQueue<PanoramicPacket>& FrameStitcher::getOutPanoramicQueue() {
-    return output_video_packets_;
-}
-
-
 void FrameStitcher::run() {
     #ifdef _GNU_SOURCE
     pthread_setname_np(pthread_self(), "FrameStitcher");
@@ -155,13 +154,16 @@ void FrameStitcher::run() {
     int32_t panoramic_width = -1;
     int32_t panoramic_height = -1;
     vector<Mat> images(2);
+    Mat panoramic_image;
+    Mat panoramic_image_yuv;
     while(running_) {
         unique_ptr<LeftRightPacket> left_right_packet(stitcher_queue_.pop(chrono::seconds(1)));
         if(left_right_packet) {
-            Mat left(left_right_packet->height, left_right_packet->width, CV_8UC3, left_right_packet->left_data.get());
-            Mat right(left_right_packet->height, left_right_packet->width, CV_8UC3, left_right_packet->right_data.get());
-            images[0] = left;
-            images[1] = right;
+            Mat left(left_right_packet->height * 3/2, left_right_packet->width, CV_8UC1, left_right_packet->left_data.get());
+            Mat right(left_right_packet->height * 3/2, left_right_packet->width, CV_8UC1, left_right_packet->right_data.get());
+
+            cvtColor(left, images[0], COLOR_YUV2BGR_NV12);
+            cvtColor(right, images[1], COLOR_YUV2BGR_NV12);
 
             // Mat dstOrg;
             // resize(images[1], dstOrg, Size(1280, 720), 0, 0, INTER_CUBIC);
@@ -182,7 +184,6 @@ void FrameStitcher::run() {
                 throw runtime_error("Can't set transform values");
             }   
 
-            Mat panoramic_image;
             stitcher->composePanorama(panoramic_image);
             if (status != Stitcher::OK) {
                 spdlog::error("Couldn't compose image: {}", int(status));
@@ -190,17 +191,17 @@ void FrameStitcher::run() {
             }
             stitcher.release();
 
+            Mat cropped_image(panoramic_image, Range(0, crop_height_), Range(0, crop_width_));
+            cvtColor(cropped_image, panoramic_image_yuv, COLOR_BGR2YUV_I420);
+
             unique_ptr<PanoramicPacket> pano_packet(new PanoramicPacket);
-            pano_packet->data_size = panoramic_image.total() * panoramic_image.elemSize();
+            pano_packet->data_size = panoramic_image_yuv.total() * panoramic_image_yuv.elemSize();
             pano_packet->data = unique_ptr<uint8_t>(new uint8_t[pano_packet->data_size]);
 
-            if(!panoramic_image.isContinuous())
-                panoramic_image = panoramic_image.clone();
+            memcpy(pano_packet->data.get(), panoramic_image_yuv.data, pano_packet->data_size);
 
-            memcpy(pano_packet->data.get(), panoramic_image.data, pano_packet->data_size);
-
-            pano_packet->width = panoramic_image.cols;
-            pano_packet->height = panoramic_image.rows;
+            pano_packet->width = panoramic_image_yuv.cols;
+            pano_packet->height = panoramic_image_yuv.rows;
             pano_packet->pts = left_right_packet->pts;
             pano_packet->pts_time = left_right_packet->pts_time;
             pano_packet->idx = left_right_packet->idx;

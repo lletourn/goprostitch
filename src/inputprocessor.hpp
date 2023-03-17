@@ -2,31 +2,16 @@
 
 #include <atomic>
 #include <chrono>
+#include <ratio>
 #include <string>
 #include <thread>
 
-
+#include "datatypes.hpp"
 #include "threadsafequeue.hpp"
-
-struct InputPacket {
-    enum InputPacketType {AUDIO, VIDEO};
-
-    InputPacketType type;
-    uint64_t data_size;
-    std::unique_ptr<uint8_t> data;
-    uint32_t width;
-    uint32_t height;
-    uint32_t pts;
-    double pts_time;
-    uint32_t idx;
-    int format;
-    uint64_t layout;
-    uint32_t sample_rate;
-};
 
 class InputProcessor {
  public:
-    InputProcessor(const std::string& filename, uint32_t queue_size);
+    InputProcessor(const std::string& filename, uint32_t video_queue_size, uint32_t audio_queue_size);
     ~InputProcessor();
 
     void start();
@@ -34,7 +19,11 @@ class InputProcessor {
     void run();
     bool is_done();
 
-    ThreadSafeQueue<InputPacket>& getOutQueue();
+    Rational video_time_base() {return video_time_base_.load();};
+    Rational audio_time_base() {return audio_time_base_.load();};
+
+    ThreadSafeQueue<VideoPacket>& getOutVideoQueue();
+    ThreadSafeQueue<AudioPacket>& getOutAudioQueue();
 
     void close();
 
@@ -43,8 +32,11 @@ class InputProcessor {
     uint64_t timecode_;
     bool running_;
     std::atomic<bool> done_;
+    std::atomic<Rational> video_time_base_;
+    std::atomic<Rational> audio_time_base_;
 
-    ThreadSafeQueue<InputPacket> packet_queue_;
+    ThreadSafeQueue<VideoPacket> video_packet_queue_;
+    ThreadSafeQueue<AudioPacket> audio_packet_queue_;
     std::thread thread_;
 
 };

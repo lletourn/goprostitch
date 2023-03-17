@@ -60,16 +60,6 @@ vector<detail::CameraParams> buildCamParams() {
 }
 
 
-void handle_packet(unique_ptr<InputPacket> packet, ThreadSafeQueue<InputPacket>& audio_queue, unordered_map<uint32_t, unique_ptr<InputPacket>>& packets) {
-    if (packet->type == InputPacket::InputPacketType::AUDIO) {
-        audio_queue.push(move(packet));
-    } else {
-        //packets.emplace(packet->idx, packet);
-        packets.insert(make_pair(packet->idx, move(packet)));
-    }
-}
-
-
 int main(int argc, const char ** argv) {
     spdlog::set_pattern("%Y%m%dT%H:%M:%S.%e [%^%l%$] -%n- -%t- : %v");
     spdlog::set_level(spdlog::level::debug);
@@ -79,45 +69,45 @@ int main(int argc, const char ** argv) {
     string output_filename(argv[3]);
     uint16_t nb_workers(atoi(argv[4]));
 
+    uint32_t pano_width = 9762;
+    uint32_t pano_height = 3198;
+
     spdlog::info("Loading file: {}", left_filename);
     spdlog::info("Loading file: {}", right_filename);
-    InputProcessor left_processor(left_filename, 60);
-    InputProcessor right_processor(right_filename, 60);
+    const uint32_t input_video_queue_size = 120;
+    InputProcessor left_processor(left_filename, input_video_queue_size, 1024);
+    InputProcessor right_processor(right_filename, input_video_queue_size, 1024);
     left_processor.start();
     right_processor.start();
 
-    spdlog::info("Writting file: {}", output_filename);
-    OutputEncoder output_encoder(output_filename, 60);
-    output_encoder.start();
-
-    ThreadSafeQueue<LeftRightPacket> stitcher_queue(40);
+    ThreadSafeQueue<LeftRightPacket> stitcher_queue(input_video_queue_size*2);
 
     vector<detail::CameraParams> camera_params = buildCamParams();
 
-    unordered_map<uint32_t, unique_ptr<InputPacket>> left_video_packets;
-    unordered_map<uint32_t, unique_ptr<InputPacket>> right_video_packets;
+    unordered_map<uint32_t, unique_ptr<VideoPacket>> left_video_packets;
+    unordered_map<uint32_t, unique_ptr<VideoPacket>> right_video_packets;
 
     spdlog::info("Find Ref frame for white balance");
-    Mat reference_image;
-    while(reference_image.data == nullptr) {
-        unique_ptr<InputPacket> left_input_packet(left_processor.getOutQueue().pop(chrono::seconds(1)));
-        if(left_input_packet) {
-            handle_packet(move(left_input_packet), output_encoder.getInLeftAudioQueue(), left_video_packets);
-            if(left_video_packets.size() > 0) {
-                auto iter = left_video_packets.cbegin();
-                spdlog::debug("Img sizes: {} vs {}", (iter->second->height * iter->second->width * 3), iter->second->data_size);
-                Mat temp_image(iter->second->height, iter->second->width, CV_8UC3, iter->second->data.get());
-                reference_image = temp_image.clone();
-            }
-        }
-    }
     vector<vector<uint32_t>> reference_bgr_value_idxs;
     vector<vector<double>> reference_bgr_cumsum;
-    FrameStitcher::BuildReferenceHistogram(reference_image, reference_bgr_value_idxs, reference_bgr_cumsum);
+    while(true) {
+        unique_ptr<VideoPacket> left_input_packet(left_processor.getOutVideoQueue().pop(chrono::seconds(1)));
+        if(left_input_packet) {
+            FrameStitcher::BuildReferenceHistogram(left_input_packet->data.get(), left_input_packet->width, left_input_packet->height, reference_bgr_value_idxs, reference_bgr_cumsum);
+
+            uint32_t idx = left_input_packet->idx;
+            left_video_packets.insert(make_pair(idx, move(left_input_packet)));
+            break;
+        }
+    }
+
+    spdlog::info("Writting file: {}", output_filename);
+    OutputEncoder output_encoder(output_filename, left_processor.getOutAudioQueue(), right_processor.getOutAudioQueue(), left_processor.video_time_base(), left_processor.audio_time_base(), input_video_queue_size);
+    output_encoder.start();
 
     vector<unique_ptr<FrameStitcher>> frame_stitchers;
     for(uint16_t i=0; i < nb_workers; ++i) {
-        unique_ptr<FrameStitcher> fs(new FrameStitcher(stitcher_queue, output_encoder.getInPanoramicQueue(), camera_params, reference_bgr_value_idxs, reference_bgr_cumsum, 10));
+        unique_ptr<FrameStitcher> fs(new FrameStitcher(pano_width, pano_height, stitcher_queue, output_encoder.getInPanoramicQueue(), camera_params, reference_bgr_value_idxs, reference_bgr_cumsum));
         fs->start();
         frame_stitchers.push_back(move(fs));
     }
@@ -130,31 +120,32 @@ int main(int argc, const char ** argv) {
     double last_right_video_time = 0.0;
     uint32_t idx_to_process = 0;
     spdlog::info("Processing all frames");
+    chrono::steady_clock::time_point start = chrono::steady_clock::now();
     while(true) {
         bool read_left = false;
         bool read_right = false;
 
-        unique_ptr<InputPacket> left_input_packet(left_processor.getOutQueue().pop(chrono::seconds(1)));
-        if(left_input_packet) {
+        unique_ptr<VideoPacket> left_video_packet(left_processor.getOutVideoQueue().pop(chrono::seconds(1)));
+        if(left_video_packet) {
             read_left = true;
-            last_left_video_idx = left_input_packet->idx;
-            last_left_video_time = left_input_packet->pts_time;
-            handle_packet(move(left_input_packet), output_encoder.getInLeftAudioQueue(), left_video_packets);
+            last_left_video_idx = left_video_packet->idx;
+            last_left_video_time = left_video_packet->pts_time;
+            left_video_packets.insert(make_pair(last_left_video_idx, move(left_video_packet)));
         }
 
-        unique_ptr<InputPacket> right_input_packet(right_processor.getOutQueue().pop(chrono::seconds(1)));
-        if(right_input_packet) {
+        unique_ptr<VideoPacket> right_video_packet(right_processor.getOutVideoQueue().pop(chrono::seconds(1)));
+        if(right_video_packet) {
             read_right = true;
-            last_right_video_idx = right_input_packet->idx;
-            last_right_video_time = right_input_packet->pts_time;
-            handle_packet(move(right_input_packet), output_encoder.getInRightAudioQueue(), right_video_packets);
+            last_right_video_idx = right_video_packet->idx;
+            last_right_video_time = right_video_packet->pts_time;
+            right_video_packets.insert(make_pair(last_right_video_idx, move(right_video_packet)));
         }
 
-        if(left_processor.is_done() && left_processor.getOutQueue().size() == 0 && (last_left_video_idx < last_video_idx)) {
+        if(left_processor.is_done() && left_processor.getOutVideoQueue().size() == 0 && (last_left_video_idx < last_video_idx)) {
             last_video_idx = last_left_video_idx;
             last_video_frame_time = last_left_video_time;
         }
-        if(right_processor.is_done() && right_processor.getOutQueue().size() == 0 && (last_right_video_idx < last_video_idx)) {
+        if(right_processor.is_done() && right_processor.getOutVideoQueue().size() == 0 && (last_right_video_idx < last_video_idx)) {
             last_video_idx = last_right_video_idx;
             last_video_frame_time = last_right_video_time;
         }
@@ -192,6 +183,19 @@ int main(int argc, const char ** argv) {
             left_video_packets.erase(idx_to_process);
             right_video_packets.erase(idx_to_process);
             ++idx_to_process;
+
+            // auto delta = chrono::duration_cast<chrono::milliseconds>(chrono::steady_clock::now() - start).count();
+            // double fps = ((double)idx_to_process/delta) * 1000.0;
+
+            if(idx_to_process % 10 == 0) {
+                spdlog::debug("L: {} R: {} S: {} oP:{}", 
+                                left_processor.getOutVideoQueue().estimated_size(),
+                                right_processor.getOutVideoQueue().estimated_size(),
+                                stitcher_queue.estimated_size(),
+                                output_encoder.getInPanoramicQueue().estimated_size());
+            }
+
+            // spdlog::debug("Main FPS: {}", fps);
         }
 
         if(!read_left && !read_right && left_processor.is_done() && right_processor.is_done()) {

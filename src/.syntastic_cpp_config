@@ -1,0 +1,3 @@
+-I/data/software/spdlog-1.11.0/include
+-I/data/software/opencv-4.7.0/include/opencv4
+-I/data/software/ffmpeg-4.4.1/include
