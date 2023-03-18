@@ -14,7 +14,7 @@ void FrameStitcher::BuildReferenceHistogram(uint8_t* reference_data, uint32_t wi
     vector<Mat> bgr_planes;
     Mat ref_yuv(height * 3/2, width, CV_8UC1, reference_data);
     Mat reference_image;
-    cvtColor(ref_yuv, reference_image, COLOR_YUV2BGR_NV12);
+    cvtColor(ref_yuv, reference_image, COLOR_YUV2BGR_I420);
 
     split(reference_image, bgr_planes);
 
@@ -162,13 +162,13 @@ void FrameStitcher::run() {
             Mat left(left_right_packet->height * 3/2, left_right_packet->width, CV_8UC1, left_right_packet->left_data.get());
             Mat right(left_right_packet->height * 3/2, left_right_packet->width, CV_8UC1, left_right_packet->right_data.get());
 
-            cvtColor(left, images[0], COLOR_YUV2BGR_NV12);
-            cvtColor(right, images[1], COLOR_YUV2BGR_NV12);
+            cvtColor(left, images[0], COLOR_YUV2BGR_I420);
+            cvtColor(right, images[1], COLOR_YUV2BGR_I420);
 
             // Mat dstOrg;
             // resize(images[1], dstOrg, Size(1280, 720), 0, 0, INTER_CUBIC);
             // cv::imshow("LeftOrg", dstOrg);
-            // MatchHistograms(images[1]);
+            MatchHistograms(images[1]);
             // Mat dst;
             // resize(images[1], dst, Size(1280, 720), 0, 0, INTER_CUBIC);
             // cv::imshow("Left", dst);
@@ -192,6 +192,7 @@ void FrameStitcher::run() {
             stitcher.release();
 
             Mat cropped_image(panoramic_image, Range(0, crop_height_), Range(0, crop_width_));
+
             cvtColor(cropped_image, panoramic_image_yuv, COLOR_BGR2YUV_I420);
 
             unique_ptr<PanoramicPacket> pano_packet(new PanoramicPacket);
@@ -200,8 +201,9 @@ void FrameStitcher::run() {
 
             memcpy(pano_packet->data.get(), panoramic_image_yuv.data, pano_packet->data_size);
 
-            pano_packet->width = panoramic_image_yuv.cols;
-            pano_packet->height = panoramic_image_yuv.rows;
+            // Don't use W H from YUV frame. Opencv rows cols represent data row col, not image row col. So it's wrong for sampled data like YUV4XX not 444.
+            pano_packet->width = cropped_image.cols;
+            pano_packet->height = cropped_image.rows;
             pano_packet->pts = left_right_packet->pts;
             pano_packet->pts_time = left_right_packet->pts_time;
             pano_packet->idx = left_right_packet->idx;

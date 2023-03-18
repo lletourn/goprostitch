@@ -2,7 +2,6 @@
 
 #include <stdexcept>
 #include <iostream>
-#include <csignal>
 #include <spdlog/spdlog.h>
 
 extern "C" {
@@ -79,8 +78,8 @@ void InputProcessor::run() {
         cerr << "Could not find stream information " << filename_ << endl;
         throw runtime_error("Error occured");
     }
-    // if(spdlog::should_log(spdlog::level::debug))
-    //     av_dump_format(av_format_ctx_, 0, filename_.c_str(), 0);
+    if(spdlog::should_log(spdlog::level::debug))
+        av_dump_format(av_format_ctx_, 0, filename_.c_str(), 0);
 
     AVCodecContext* video_codec_ctx_orig = NULL;
     AVCodecContext* video_codec_ctx = NULL;
@@ -209,9 +208,9 @@ void InputProcessor::run() {
                 double video_fps = (1.0/delta) * 1000.0;
  
                 video_packet_queue_.push(move(input_packet));
-                delta = chrono::duration_cast<chrono::milliseconds>(chrono::steady_clock::now() - start).count();
-                double all_fps = ((double)video_idx/delta) * 1000.0;
-                spdlog::debug("Input FPS: {} All FPS: {}", video_fps, all_fps);
+                // delta = chrono::duration_cast<chrono::milliseconds>(chrono::steady_clock::now() - start).count();
+                // double all_fps = ((double)video_idx/delta) * 1000.0;
+                // spdlog::debug("Input FPS: {} All FPS: {}", video_fps, all_fps);
             }
         } else if (packet->stream_index == audio_stream) {
             ret = avcodec_send_packet(audio_codec_ctx, packet);
@@ -221,7 +220,7 @@ void InputProcessor::run() {
                 throw runtime_error("Error occured");
             }
             while (ret >= 0) {
-                ret = avcodec_receive_frame(video_codec_ctx, audio_frame);
+                ret = avcodec_receive_frame(audio_codec_ctx, audio_frame);
                 if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF) {
                     break;
                 } else if (ret < 0) {
@@ -238,7 +237,7 @@ void InputProcessor::run() {
                 );
 
                 unique_ptr<uint8_t> audio_buf(new uint8_t[data_size]);
-                memcpy(audio_buf.get(), audio_frame->data[0], data_size);
+                memcpy(audio_buf.get(), (uint8_t*)audio_frame->data, data_size);
                 
                 // const uint32_t channel_name_buf_size = 128;
                 // char* channel_name_buf = new char[channel_name_buf_size];

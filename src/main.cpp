@@ -74,9 +74,9 @@ int main(int argc, const char ** argv) {
 
     spdlog::info("Loading file: {}", left_filename);
     spdlog::info("Loading file: {}", right_filename);
-    const uint32_t input_video_queue_size = 120;
-    InputProcessor left_processor(left_filename, input_video_queue_size, 1024);
-    InputProcessor right_processor(right_filename, input_video_queue_size, 1024);
+    const uint32_t input_video_queue_size = 5;
+    InputProcessor left_processor(left_filename, input_video_queue_size, 512);
+    InputProcessor right_processor(right_filename, input_video_queue_size, 512);
     left_processor.start();
     right_processor.start();
 
@@ -102,7 +102,7 @@ int main(int argc, const char ** argv) {
     }
 
     spdlog::info("Writting file: {}", output_filename);
-    OutputEncoder output_encoder(output_filename, left_processor.getOutAudioQueue(), right_processor.getOutAudioQueue(), left_processor.video_time_base(), left_processor.audio_time_base(), input_video_queue_size);
+    OutputEncoder output_encoder(output_filename, left_processor.getOutAudioQueue(), right_processor.getOutAudioQueue(), pano_width, pano_height, left_processor.video_time_base(), left_processor.audio_time_base(), input_video_queue_size);
     output_encoder.start();
 
     vector<unique_ptr<FrameStitcher>> frame_stitchers;
