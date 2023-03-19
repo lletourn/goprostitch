@@ -116,8 +116,8 @@ void FrameStitcher::MatchHistograms(Mat& image) {
 }
 
 
-FrameStitcher::FrameStitcher(uint32_t crop_width, uint32_t crop_height, ThreadSafeQueue<LeftRightPacket>& stitcher_queue, ThreadSafeQueue<PanoramicPacket>& output_queue, vector<detail::CameraParams> camera_params, const vector<vector<uint32_t>>& reference_bgr_value_idxs, const vector<vector<double>>& reference_bgr_cumsum)
-: crop_width_(crop_width), crop_height_(crop_height), stitcher_queue_(stitcher_queue), output_queue_(output_queue), camera_params_(camera_params), reference_bgr_value_idxs_(reference_bgr_value_idxs), reference_bgr_cumsum_(reference_bgr_cumsum), running_(false), done_(false) {
+FrameStitcher::FrameStitcher(uint32_t crop_offset_x, uint32_t crop_offset_y, uint32_t crop_width, uint32_t crop_height, ThreadSafeQueue<LeftRightPacket>& stitcher_queue, ThreadSafeQueue<PanoramicPacket>& output_queue, vector<detail::CameraParams> camera_params, const vector<vector<uint32_t>>& reference_bgr_value_idxs, const vector<vector<double>>& reference_bgr_cumsum)
+: crop_offset_x_(crop_offset_x), crop_offset_y_(crop_offset_y), crop_width_(crop_width), crop_height_(crop_height), stitcher_queue_(stitcher_queue), output_queue_(output_queue), camera_params_(camera_params), reference_bgr_value_idxs_(reference_bgr_value_idxs), reference_bgr_cumsum_(reference_bgr_cumsum), running_(false), done_(false) {
 }
 
 
@@ -191,7 +191,7 @@ void FrameStitcher::run() {
             }
             stitcher.release();
 
-            Mat cropped_image(panoramic_image, Range(0, crop_height_), Range(0, crop_width_));
+            Mat cropped_image(panoramic_image, Range(crop_offset_y_, crop_offset_y_+crop_height_), Range(crop_offset_x_, crop_offset_x_+crop_width_));
 
             cvtColor(cropped_image, panoramic_image_yuv, COLOR_BGR2YUV_I420);
 

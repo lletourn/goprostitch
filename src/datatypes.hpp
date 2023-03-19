@@ -6,6 +6,9 @@
 #include <thread>
 #include <vector>
 
+extern "C" {
+    #include <libavcodec/packet.h>
+}
 
 struct Rational {
     uint32_t num;
@@ -45,13 +48,10 @@ struct VideoPacket {
     std::unique_ptr<uint8_t> data;
 };
 
-struct AudioPacket {
-    uint32_t pts;
-    double pts_time;
-    uint32_t idx;
-    int format;
-    uint64_t layout;
-    uint32_t sample_rate;
-    uint64_t data_size;
-    std::unique_ptr<uint8_t> data;
+struct PacketDeleter {
+    void operator()(AVPacket* packet) const {
+        av_packet_free(&packet);
+    }
 };
+
+using avpacket_unique_ptr = std::unique_ptr<AVPacket, PacketDeleter>;

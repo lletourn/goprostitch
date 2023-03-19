@@ -69,18 +69,29 @@ int main(int argc, const char ** argv) {
     string output_filename(argv[3]);
     uint16_t nb_workers(atoi(argv[4]));
 
-    uint32_t pano_width = 9762;
-    uint32_t pano_height = 3198;
+    uint32_t pano_offset_x = 694;
+    uint32_t pano_offset_y = 307;
+    uint32_t pano_width = 8192;
+    uint32_t pano_height = 2848;
 
     spdlog::info("Loading file: {}", left_filename);
     spdlog::info("Loading file: {}", right_filename);
     const uint32_t input_video_queue_size = 5;
     InputProcessor left_processor(left_filename, input_video_queue_size, 512);
+    left_processor.initialize();
     InputProcessor right_processor(right_filename, input_video_queue_size, 512);
-    left_processor.start();
-    right_processor.start();
+    right_processor.initialize();
 
     ThreadSafeQueue<LeftRightPacket> stitcher_queue(input_video_queue_size*2);
+
+    spdlog::info("Writting file: {}", output_filename);
+    OutputEncoder output_encoder(output_filename, left_processor.getOutAudioQueue(), right_processor.getOutAudioQueue(), pano_width, pano_height, left_processor.video_time_base(), left_processor.audio_time_base(), input_video_queue_size);
+    output_encoder.initialize(left_processor.audio_codec_parameters(), right_processor.audio_codec_parameters());
+
+    // Start IO Threads
+    output_encoder.start();
+    left_processor.start();
+    right_processor.start();
 
     vector<detail::CameraParams> camera_params = buildCamParams();
 
@@ -101,13 +112,10 @@ int main(int argc, const char ** argv) {
         }
     }
 
-    spdlog::info("Writting file: {}", output_filename);
-    OutputEncoder output_encoder(output_filename, left_processor.getOutAudioQueue(), right_processor.getOutAudioQueue(), pano_width, pano_height, left_processor.video_time_base(), left_processor.audio_time_base(), input_video_queue_size);
-    output_encoder.start();
 
     vector<unique_ptr<FrameStitcher>> frame_stitchers;
     for(uint16_t i=0; i < nb_workers; ++i) {
-        unique_ptr<FrameStitcher> fs(new FrameStitcher(pano_width, pano_height, stitcher_queue, output_encoder.getInPanoramicQueue(), camera_params, reference_bgr_value_idxs, reference_bgr_cumsum));
+        unique_ptr<FrameStitcher> fs(new FrameStitcher(pano_offset_x, pano_offset_y, pano_width, pano_height, stitcher_queue, output_encoder.getInPanoramicQueue(), camera_params, reference_bgr_value_idxs, reference_bgr_cumsum));
         fs->start();
         frame_stitchers.push_back(move(fs));
     }
