@@ -86,8 +86,8 @@ void OutputEncoder::init_video() {
         throw runtime_error("Could not allocate video stream");
     }
 
-    // video_codec_ = avcodec_find_encoder(AV_CODEC_ID_HEVC);
-    video_codec_ = avcodec_find_encoder(AV_CODEC_ID_H264);
+    video_codec_ = avcodec_find_encoder(AV_CODEC_ID_HEVC);
+    // video_codec_ = avcodec_find_encoder(AV_CODEC_ID_H264);
     if (!video_codec_) {
         spdlog::error("Video codec not found");
         throw runtime_error("Video codec not found");
@@ -106,7 +106,7 @@ void OutputEncoder::init_video() {
     video_codec_ctx_->time_base = tb;
     video_codec_ctx_->framerate = (AVRational){60000, 1001};
     av_opt_set(video_codec_ctx_->priv_data, "preset", "fast", 0);
-    av_opt_set(video_codec_ctx_->priv_data, "crf", "23", 0);
+    av_opt_set(video_codec_ctx_->priv_data, "crf", "28", 0);
     video_codec_ctx_->thread_type = FF_THREAD_FRAME;
     video_codec_ctx_->thread_count = 0;
 
@@ -290,7 +290,7 @@ void OutputEncoder::run() {
 
             current_panoramic_packet.reset();
 
-            if(frame_idx % 10 == 0) {
+            if(frame_idx % 60 == 0) {
                 double current_duration = (double)video_frame_->pts * av_q2d(video_stream_->time_base);
 
                 double pct_done = current_duration * 100.0 / (double)total_duration_;
