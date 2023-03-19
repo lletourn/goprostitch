@@ -27,6 +27,7 @@ class InputProcessor {
 
     Rational video_time_base() {return video_time_base_;};
     Rational audio_time_base() {return audio_time_base_;};
+    double duration() {return duration_;};
     // Pointer is owned by this class
     const AVCodecParameters* audio_codec_parameters() {return av_format_ctx_->streams[audio_stream_]->codecpar;};
     
@@ -42,6 +43,7 @@ class InputProcessor {
     std::atomic<bool> done_;
     Rational video_time_base_;
     Rational audio_time_base_;
+    double duration_;
 
     ThreadSafeQueue<VideoPacket> video_packet_queue_;
     ThreadSafeQueue<AVPacket, PacketDeleter> audio_packet_queue_;

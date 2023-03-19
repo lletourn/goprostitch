@@ -1,8 +1,9 @@
 #include "outputencoder.hpp"
 
-#include <stdexcept>
 #include <iostream>
 #include <csignal>
+#include <stdexcept>
+#include <sstream>
 #include <spdlog/spdlog.h>
 
 #include <opencv2/opencv.hpp>
@@ -50,7 +51,9 @@ ThreadSafeQueue<PanoramicPacket>& OutputEncoder::getInPanoramicQueue() {
 }
 
 
-void OutputEncoder::initialize(const AVCodecParameters* left_audio_codec_parameters, const AVCodecParameters* right_audio_codec_parameters) {
+void OutputEncoder::initialize(const AVCodecParameters* left_audio_codec_parameters, const AVCodecParameters* right_audio_codec_parameters, double total_duration) {
+    total_duration_ = total_duration;
+
     avformat_alloc_output_context2(&av_format_ctx_, NULL, NULL, filename_.c_str());
     if (!av_format_ctx_) {
         spdlog::error("Could not allocate format context");
@@ -168,6 +171,17 @@ AVStream* OutputEncoder::init_audio(const AVCodecParameters* audio_codec_paramet
 }
 
 
+string sToHMS(double seconds) {
+    stringstream buf;
+    int hours, minutes;
+    minutes = seconds / 60;
+    hours = minutes / 60;
+
+    buf << hours << ':' << int(minutes%60) << ':' << int((int)seconds%60);
+    return buf.str();
+}
+
+
 void OutputEncoder::run() {
     #ifdef _GNU_SOURCE
     pthread_setname_np(pthread_self(), "OutputEncoder");
@@ -276,10 +290,19 @@ void OutputEncoder::run() {
 
             current_panoramic_packet.reset();
 
-            if(frame_idx % 1000 == 0) {
+            if(frame_idx % 10 == 0) {
+                double current_duration = (double)video_frame_->pts * av_q2d(video_stream_->time_base);
+
+                double pct_done = current_duration * 100.0 / (double)total_duration_;
                 auto delta = chrono::duration_cast<chrono::milliseconds>(chrono::steady_clock::now() - start).count();
                 double fps = ((double)frame_idx/delta) * 1000.0; 
-                spdlog::debug("FPS: {}", fps);
+
+                double est_total_time = (double)delta * 100.0 / pct_done / 1000.0;
+                string est_total_time_str(sToHMS(est_total_time));
+
+                double eta = est_total_time*(100.0-pct_done) / 100.0;
+                string eta_str(sToHMS(eta));
+                spdlog::info("Output FPS: {:.2f} Done: {:.2f}% Est.Time: {} ETA: {}", fps, pct_done, est_total_time_str, eta_str);
             }
         } // while frame_idx
     }

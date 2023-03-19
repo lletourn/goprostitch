@@ -78,6 +78,7 @@ void InputProcessor::initialize() {
         if (av_format_ctx_->streams[i]->codecpar->codec_type == AVMEDIA_TYPE_VIDEO) {
             video_stream_ = i;
 
+            duration_ = (double)av_format_ctx_->streams[i]->duration * av_q2d(av_format_ctx_->streams[i]->time_base);
             if(av_format_ctx_->streams[i]->codecpar->sample_aspect_ratio.num != 1 || av_format_ctx_->streams[i]->codecpar->sample_aspect_ratio.den != 1) {
                 spdlog::error("SAR is not 1:1 for input video");
                 throw runtime_error("SAR is not 1:1 for input video");
@@ -107,7 +108,7 @@ void InputProcessor::initialize() {
         throw runtime_error("Error occured");
     }
     video_codec_ctx_->thread_type = FF_THREAD_FRAME;
-    video_codec_ctx_->thread_count = 0;
+    video_codec_ctx_->thread_count = 1;
     spdlog::info("SAR: {} / {}", video_codec_ctx_->sample_aspect_ratio.num, video_codec_ctx_->sample_aspect_ratio.den);
 
     ret = avcodec_open2(video_codec_ctx_, video_codec_, NULL);
