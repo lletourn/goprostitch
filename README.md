@@ -65,7 +65,7 @@ meson setup libvmaf/build libvmaf --buildtype release -Dprefix=/data/software/vm
 wget https://ffmpeg.org/releases/ffmpeg-5.1.2.tar.gz -O ~/src/ffmpeg-5.1.2.tar.gz
 tar xvf ffmpeg-5.1.2.tar.gz
 cd ffmpeg-5.1.2
-./configure --prefix=${HOME}/software/ffmpeg-5.1.2 --enable-libxml2 --enable-libfreetype --enable-gpl --enable-libx264 --enable-libx265 --enable-libsvtav1 --enable-nonfree --enable-libopus --enable-libvpx --enable-openssl --enable-vmaf --enable-shared
+./configure --prefix=${HOME}/software/ffmpeg-5.1.2 --enable-libxml2 --enable-libfreetype --enable-gpl --enable-libx264 --enable-libx265 --enable-libsvtav1 --enable-nonfree --enable-libopus --enable-libvpx --enable-openssl --enable-libvmaf --enable-shared
 
 cd ~/src
 wget "https://github.com/gabime/spdlog/archive/refs/tags/v1.11.0.tar.gz" -O ~/src/spdlog-1.11.0.tar.gz
@@ -81,4 +81,4 @@ rm -rf build ; mkdir build ; cd build ; cmake -DENABLE_CXX11=ON -DCMAKE_BUILD_TY
 ```
 
 # Compile
-rm -rf build ; mkdir build ; cd build ; cmake -DCMAKE_BUILD_TYPE=Release ../ && make -j4
+rm -rf build ; mkdir build ; cd build ; cmake -DCMAKE_BUILD_TYPE=Release ../ && make -j$(nproc)
