@@ -16,7 +16,7 @@ extern "C" {
 
 class InputProcessor {
  public:
-    InputProcessor(const std::string& filename, uint32_t video_queue_size, uint32_t audio_queue_size);
+    InputProcessor(const std::string& filename, uint32_t queue_size);
     ~InputProcessor();
 
     void initialize();

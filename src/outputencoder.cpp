@@ -99,16 +99,23 @@ void OutputEncoder::init_video() {
         throw runtime_error("Could not allocate video codec context");
     }
 
+    AVDictionary *opt=NULL;
+    av_dict_set(&opt, "x265-params", "pools=4", 0);
+    av_dict_set(&opt, "crf", "24", 0);
+    av_dict_set(&opt, "preset", "slow", 0);
+    av_dict_set(&opt, "keyint", "600", 0);
+
     video_codec_ctx_->pix_fmt = AV_PIX_FMT_YUV420P;
     AVRational tb;
     tb.num = video_time_base_.num;
     tb.den = video_time_base_.den;
     video_codec_ctx_->time_base = tb;
+    video_codec_ctx_->gop_size = 600;
     video_codec_ctx_->framerate = (AVRational){60000, 1001};
-    av_opt_set(video_codec_ctx_->priv_data, "preset", "fast", 0);
-    av_opt_set(video_codec_ctx_->priv_data, "crf", "28", 0);
+    av_opt_set(video_codec_ctx_->priv_data, "preset", "slow", 0);
+    av_opt_set(video_codec_ctx_->priv_data, "crf", "24", 0);
     video_codec_ctx_->thread_type = FF_THREAD_FRAME;
-    video_codec_ctx_->thread_count = 0;
+    video_codec_ctx_->thread_count = 1;
 
 
     if (av_format_ctx_->oformat->flags & AVFMT_GLOBALHEADER) {
@@ -118,7 +125,7 @@ void OutputEncoder::init_video() {
     video_codec_ctx_->height = video_height_;
     video_codec_ctx_->width = video_width_;
 
-    int32_t ret = avcodec_open2(video_codec_ctx_, video_codec_, NULL);
+    int32_t ret = avcodec_open2(video_codec_ctx_, video_codec_, &opt);
     if (ret < 0) {
         spdlog::error("Cannot open video encoder");
         throw runtime_error("Cannot open video encoder");;
@@ -201,6 +208,7 @@ void OutputEncoder::run() {
     uint32_t frame_idx=0;
     chrono::steady_clock::time_point start = chrono::steady_clock::now();
     unordered_map<uint32_t, unique_ptr<PanoramicPacket>> video_packets;
+    double prev_delta = 0;
     while(running_) {
         while(true) {
             unique_ptr<AVPacket, PacketDeleter> audio_packet(left_audio_packet_queue_.pop(audio_wait));
@@ -290,11 +298,12 @@ void OutputEncoder::run() {
 
             current_panoramic_packet.reset();
 
-            if(frame_idx % 60 == 0) {
+            double delta = chrono::duration_cast<chrono::milliseconds>(chrono::steady_clock::now() - start).count();
+            if((delta - prev_delta) > 60000.0) {
+                prev_delta = delta;
                 double current_duration = (double)video_frame_->pts * av_q2d(video_stream_->time_base);
 
                 double pct_done = current_duration * 100.0 / (double)total_duration_;
-                auto delta = chrono::duration_cast<chrono::milliseconds>(chrono::steady_clock::now() - start).count();
                 double fps = ((double)frame_idx/delta) * 1000.0; 
 
                 double est_total_time = (double)delta * 100.0 / pct_done / 1000.0;

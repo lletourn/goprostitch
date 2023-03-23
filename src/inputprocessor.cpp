@@ -11,8 +11,8 @@ extern "C" {
 
 using namespace std;
 
-InputProcessor::InputProcessor(const string& filename, uint32_t video_queue_size, uint32_t audio_queue_size)
-: filename_(filename), timecode_(0), running_(false), done_(false), video_packet_queue_(video_queue_size), audio_packet_queue_(audio_queue_size), video_time_base_(Rational(0,0)), audio_time_base_(Rational(0,0)) {
+InputProcessor::InputProcessor(const string& filename, uint32_t queue_size)
+: filename_(filename), timecode_(0), running_(false), done_(false), video_packet_queue_(queue_size), audio_packet_queue_(queue_size), video_time_base_(Rational(0,0)), audio_time_base_(Rational(0,0)) {
     av_format_ctx_ = NULL;
 }
 

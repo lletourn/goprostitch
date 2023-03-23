@@ -77,10 +77,10 @@ int main(int argc, const char ** argv) {
     spdlog::info("Loading file: {}", left_filename);
     spdlog::info("Loading file: {}", right_filename);
 
-    const uint32_t input_video_queue_size = 10;
-    InputProcessor left_processor(left_filename, input_video_queue_size, 512);
+    const uint32_t input_queue_size = 2;
+    InputProcessor left_processor(left_filename, input_queue_size);
     left_processor.initialize();
-    InputProcessor right_processor(right_filename, input_video_queue_size, 512);
+    InputProcessor right_processor(right_filename, input_queue_size);
     right_processor.initialize();
 
     spdlog::info("Left duratiaon: {}", left_processor.duration());
@@ -88,10 +88,10 @@ int main(int argc, const char ** argv) {
     double duration = left_processor.duration();
     if(duration > right_processor.duration())
         duration = right_processor.duration();
-    ThreadSafeQueue<LeftRightPacket> stitcher_queue(input_video_queue_size*3);
+    ThreadSafeQueue<LeftRightPacket> stitcher_queue(input_queue_size*3);
 
     spdlog::info("Writting file: {}", output_filename);
-    OutputEncoder output_encoder(output_filename, left_processor.getOutAudioQueue(), right_processor.getOutAudioQueue(), pano_width, pano_height, left_processor.video_time_base(), left_processor.audio_time_base(), input_video_queue_size);
+    OutputEncoder output_encoder(output_filename, left_processor.getOutAudioQueue(), right_processor.getOutAudioQueue(), pano_width, pano_height, left_processor.video_time_base(), left_processor.audio_time_base(), input_queue_size);
     output_encoder.initialize(left_processor.audio_codec_parameters(), right_processor.audio_codec_parameters(), duration);
 
     // Start IO Threads
@@ -135,6 +135,7 @@ int main(int argc, const char ** argv) {
     uint32_t idx_to_process = 0;
     spdlog::info("Processing all frames");
     chrono::steady_clock::time_point start = chrono::steady_clock::now();
+    double prev_delta = 0;
     while(true) {
         bool read_left = false;
         bool read_right = false;
@@ -156,10 +157,12 @@ int main(int argc, const char ** argv) {
         }
 
         if(left_processor.is_done() && left_processor.getOutVideoQueue().size() == 0 && (last_left_video_idx < last_video_idx)) {
+            spdlog::info("Left input is done");
             last_video_idx = last_left_video_idx;
             last_video_frame_time = last_left_video_time;
         }
         if(right_processor.is_done() && right_processor.getOutVideoQueue().size() == 0 && (last_right_video_idx < last_video_idx)) {
+            spdlog::info("Right input is done");
             last_video_idx = last_right_video_idx;
             last_video_frame_time = last_right_video_time;
         }
@@ -198,17 +201,17 @@ int main(int argc, const char ** argv) {
             right_video_packets.erase(idx_to_process);
             ++idx_to_process;
 
-            // auto delta = chrono::duration_cast<chrono::milliseconds>(chrono::steady_clock::now() - start).count();
+            double delta = chrono::duration_cast<chrono::milliseconds>(chrono::steady_clock::now() - start).count();
             // double fps = ((double)idx_to_process/delta) * 1000.0;
 
-            if(idx_to_process % 10 == 0) {
+            if((delta - prev_delta) > 60000.0) {
+                prev_delta = delta;
                 spdlog::debug("L: {} R: {} S: {} oP:{}", 
                                 left_processor.getOutVideoQueue().estimated_size(),
                                 right_processor.getOutVideoQueue().estimated_size(),
                                 stitcher_queue.estimated_size(),
                                 output_encoder.getInPanoramicQueue().estimated_size());
             }
-
             // spdlog::debug("Main FPS: {}", fps);
         }
 
@@ -218,10 +221,6 @@ int main(int argc, const char ** argv) {
     }
     left_processor.stop();
     right_processor.stop();
-
-    for(unique_ptr<FrameStitcher>& fs : frame_stitchers) {
-        fs->stop();
-    }
 
     output_encoder.stop();
     spdlog::info("Done");
