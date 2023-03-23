@@ -14,11 +14,12 @@
 class FrameStitcher {
  public:
     static void BuildReferenceHistogram(uint8_t* reference_data, uint32_t width, uint32_t height, std::vector<std::vector<uint32_t>>& bgr_value_idxs, std::vector<std::vector<double>>& bgr_cumsum);
+    static void MatchHistograms(cv::Mat& image, const std::vector<std::vector<double>>& reference_bgr_cumsum, const std::vector<std::vector<uint32_t>>& reference_bgr_value_idxs);
+    static void interp(const std::vector<double>& x, const std::vector<double>& xp, const std::vector<uint32_t>& yp, std::vector<uint8_t>& y);
 
     FrameStitcher(uint32_t crop_offset_x, uint32_t crop_offset_y, uint32_t crop_width, uint32_t crop_height, ThreadSafeQueue<LeftRightPacket>& stitcher_queue, ThreadSafeQueue<PanoramicPacket>& output_queue, std::vector<cv::detail::CameraParams> camera_params, const std::vector<std::vector<uint32_t>>& reference_bgr_value_idxs, const std::vector<std::vector<double>>& reference_bgr_cumsum);
     ~FrameStitcher();
 
-    void MatchHistograms(cv::Mat& image);
 
     void start();
     void stop();
@@ -26,8 +27,6 @@ class FrameStitcher {
     bool is_done();
 
     void close();
- private:
-    void interp(const std::vector<double>& x, const std::vector<double>& xp, const std::vector<uint32_t>& yp, std::vector<uint8_t>& y);
 
  private:
     uint32_t crop_offset_x_;

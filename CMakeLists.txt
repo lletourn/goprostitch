@@ -22,6 +22,6 @@ set_property(TARGET ${PROJECT_NAME} PROPERTY CXX_STANDARD 17)
 
 target_link_libraries(${PROJECT_NAME} PRIVATE PkgConfig::LIBAV ${OpenCV_LIBS} spdlog::spdlog)
 
-add_executable(paramextractor ${CMAKE_SOURCE_DIR}/src/paramextractor.cpp)
+add_executable(paramextractor ${CMAKE_SOURCE_DIR}/src/paramextractor.cpp ${CMAKE_SOURCE_DIR}/src/framestitcher.cpp)
 set_property(TARGET paramextractor PROPERTY CXX_STANDARD 17)
-target_link_libraries(paramextractor PRIVATE ${OpenCV_LIBS} spdlog::spdlog)
+target_link_libraries(paramextractor PRIVATE PkgConfig::LIBAV ${OpenCV_LIBS} spdlog::spdlog)

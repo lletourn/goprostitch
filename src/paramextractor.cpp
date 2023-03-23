@@ -4,6 +4,8 @@
 #include <spdlog/spdlog.h>
 #include <opencv2/opencv.hpp>
 
+#include "framestitcher.hpp"
+
 using namespace std;
 using namespace cv;
 
@@ -29,6 +31,7 @@ void write_camera_params(ofstream& writer, const detail::CameraParams camera_par
     cout << "Is " << label << " t zero: " << camera_params.t << endl;
 }
 
+
 int main(int argc, const char* argv[]) {
     spdlog::set_pattern("%Y%m%dT%H:%M:%S.%e [%^%l%$] -%n- -%t- : %v");
     spdlog::set_level(spdlog::level::debug);
@@ -51,6 +54,21 @@ int main(int argc, const char* argv[]) {
     left_video.read(left_image);
     Mat right_image;
     right_video.read(right_image);
+
+    spdlog::info("Writing original images");
+    imwrite("left.png", left_image);
+    imwrite("right.png", right_image);
+
+    vector<vector<uint32_t>> bgr_value_idxs;
+    vector<vector<double>> bgr_cumsum;
+    Mat left_yuv;
+    cvtColor(left_image, left_yuv, COLOR_BGR2YUV_I420);
+    spdlog::info("Building ref image");
+    FrameStitcher::BuildReferenceHistogram(left_yuv.data, left_image.cols, left_image.rows, bgr_value_idxs, bgr_cumsum);
+    spdlog::info("Matching histo");
+    FrameStitcher::MatchHistograms(right_image, bgr_cumsum, bgr_value_idxs);
+    spdlog::info("Writing match histo image");
+    imwrite("right-corrected.png", right_image);
 
     spdlog::info("Create stitcher");
     vector<Mat> images;
