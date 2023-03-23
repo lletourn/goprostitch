@@ -76,7 +76,8 @@ void FrameStitcher::interp(const vector<double>& x, const vector<double>& xp, co
 	}
 }
 
-void FrameStitcher::MatchHistograms(Mat& image) {
+
+void FrameStitcher::MatchHistograms(Mat& image, const std::vector<std::vector<double>>& reference_bgr_cumsum, const std::vector<std::vector<uint32_t>>& reference_bgr_value_idxs) {
     vector<Mat> bgr_planes;
     split(image, bgr_planes);
 
@@ -104,7 +105,7 @@ void FrameStitcher::MatchHistograms(Mat& image) {
         // Interpolate cumulative sum curve from image to reference curve to pixel value
         // https://en.wikipedia.org/wiki/Histogram_matching
         // https://scikit-image.org/docs/stable/auto_examples/color_exposure/plot_histogram_matching.html
-        interp(bgr_cumsum, reference_bgr_cumsum_[i], reference_bgr_value_idxs_[i], interp_a_values);
+        interp(bgr_cumsum, reference_bgr_cumsum[i], reference_bgr_value_idxs[i], interp_a_values);
         for(uint32_t y=0; y < image.rows; ++y) {
             for(uint32_t x=0; x < image.cols; ++x) {
                 uint8_t pixel = bgr_planes[i].at<uint8_t>(y,x);
@@ -168,7 +169,7 @@ void FrameStitcher::run() {
             // Mat dstOrg;
             // resize(images[1], dstOrg, Size(1280, 720), 0, 0, INTER_CUBIC);
             // cv::imshow("LeftOrg", dstOrg);
-            MatchHistograms(images[1]);
+            MatchHistograms(images[1], reference_bgr_cumsum_, reference_bgr_value_idxs_);
             // Mat dst;
             // resize(images[1], dst, Size(1280, 720), 0, 0, INTER_CUBIC);
             // cv::imshow("Left", dst);
