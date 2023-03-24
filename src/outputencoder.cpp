@@ -100,7 +100,7 @@ void OutputEncoder::init_video() {
     }
 
     AVDictionary *opt=NULL;
-    av_dict_set(&opt, "x265-params", "pools=4", 0);
+    av_dict_set(&opt, "x265-params", "pools=16", 0);
     av_dict_set(&opt, "crf", "24", 0);
     av_dict_set(&opt, "preset", "slow", 0);
     av_dict_set(&opt, "keyint", "600", 0);
