@@ -117,8 +117,30 @@ void FrameStitcher::MatchHistograms(Mat& image, const std::vector<std::vector<do
 }
 
 
-FrameStitcher::FrameStitcher(uint32_t crop_offset_x, uint32_t crop_offset_y, uint32_t crop_width, uint32_t crop_height, ThreadSafeQueue<LeftRightPacket>& stitcher_queue, ThreadSafeQueue<PanoramicPacket>& output_queue, vector<detail::CameraParams> camera_params, const vector<vector<uint32_t>>& reference_bgr_value_idxs, const vector<vector<double>>& reference_bgr_cumsum)
-: crop_offset_x_(crop_offset_x), crop_offset_y_(crop_offset_y), crop_width_(crop_width), crop_height_(crop_height), stitcher_queue_(stitcher_queue), output_queue_(output_queue), camera_params_(camera_params), reference_bgr_value_idxs_(reference_bgr_value_idxs), reference_bgr_cumsum_(reference_bgr_cumsum), running_(false), done_(false) {
+FrameStitcher::FrameStitcher(
+    uint32_t crop_offset_x,
+    uint32_t crop_offset_y,
+    uint32_t crop_width,
+    uint32_t crop_height,
+    ThreadSafeQueue<LeftRightPacket>& stitcher_queue,
+    ThreadSafeQueue<PanoramicPacket>& output_queue,
+    vector<detail::CameraParams> camera_params,
+    const vector<UMat>& image_masks,
+    const vector<vector<uint32_t>>& reference_bgr_value_idxs,
+    const vector<vector<double>>& reference_bgr_cumsum)
+: match_histogram_(false),
+  crop_offset_x_(crop_offset_x),
+  crop_offset_y_(crop_offset_y),
+  crop_width_(crop_width),
+  crop_height_(crop_height),
+  stitcher_queue_(stitcher_queue),
+  output_queue_(output_queue),
+  camera_params_(camera_params),
+  image_masks_(image_masks),
+  reference_bgr_value_idxs_(reference_bgr_value_idxs),
+  reference_bgr_cumsum_(reference_bgr_cumsum),
+  running_(false),
+  done_(false) {
 }
 
 
@@ -147,6 +169,22 @@ bool FrameStitcher::is_done() {
     return done_.load();
 } 
 
+void FrameStitcher::stitch(const vector<Mat>& images, Mat& panoramic_image) {
+    Ptr<Stitcher> stitcher(Stitcher::create(Stitcher::PANORAMA));
+    Stitcher::Status status = stitcher->setTransform(images, camera_params_);
+    if (status != Stitcher::OK) {
+        spdlog::error("Can't set transform values: {}", int(status));
+        throw runtime_error("Can't set transform values");
+    }   
+
+    stitcher->composePanorama(panoramic_image);
+    if (status != Stitcher::OK) {
+        spdlog::error("Couldn't compose image: {}", int(status));
+        throw runtime_error("Couldn't compose image");
+    }
+    stitcher.release();
+}
+
 void FrameStitcher::run() {
     #ifdef _GNU_SOURCE
     pthread_setname_np(pthread_self(), "FrameStitcher");
@@ -166,31 +204,10 @@ void FrameStitcher::run() {
             cvtColor(left, images[0], COLOR_YUV2BGR_I420);
             cvtColor(right, images[1], COLOR_YUV2BGR_I420);
 
-            // Mat dstOrg;
-            // resize(images[1], dstOrg, Size(1280, 720), 0, 0, INTER_CUBIC);
-            // cv::imshow("LeftOrg", dstOrg);
-            MatchHistograms(images[1], reference_bgr_cumsum_, reference_bgr_value_idxs_);
-            // Mat dst;
-            // resize(images[1], dst, Size(1280, 720), 0, 0, INTER_CUBIC);
-            // cv::imshow("Left", dst);
-            // cv::waitKey();
-            // cv::destroyWindow("Left");
-            // cv::destroyWindow("LeftOrg");
+            if(match_histogram_)
+                MatchHistograms(images[1], reference_bgr_cumsum_, reference_bgr_value_idxs_);
 
-
-            Ptr<Stitcher> stitcher(Stitcher::create(Stitcher::PANORAMA));
-            Stitcher::Status status = stitcher->setTransform(images, camera_params_);
-            if (status != Stitcher::OK) {
-                spdlog::error("Can't set transform values: {}", int(status));
-                throw runtime_error("Can't set transform values");
-            }   
-
-            stitcher->composePanorama(panoramic_image);
-            if (status != Stitcher::OK) {
-                spdlog::error("Couldn't compose image: {}", int(status));
-                throw runtime_error("Couldn't compose image");
-            }
-            stitcher.release();
+            stitch(images, panoramic_image);
 
             Mat cropped_image(panoramic_image, Range(crop_offset_y_, crop_offset_y_+crop_height_), Range(crop_offset_x_, crop_offset_x_+crop_width_));
 

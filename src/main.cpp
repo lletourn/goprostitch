@@ -9,55 +9,10 @@
 #include "framestitcher.hpp"
 #include "inputprocessor.hpp"
 #include "outputencoder.hpp"
+#include "seamreader.hpp"
 
 using namespace std;
 using namespace cv;
-
-vector<detail::CameraParams> buildCamParams() {
-    spdlog::info("Setting up camera params");
-    Mat left_R(3, 3, CV_32F);
-    left_R.at<float>(0,0) = 0.98906273;
-    left_R.at<float>(0,1) = -0.076125443;
-    left_R.at<float>(0,2) = -0.12633191;
-    left_R.at<float>(1,0) = -5.9456329e-10;
-    left_R.at<float>(1,1) = 0.85651541;
-    left_R.at<float>(1,2) = -0.51612151;
-    left_R.at<float>(2,0) = 0.1474952;
-    left_R.at<float>(2,1) = 0.51047659;
-    left_R.at<float>(2,2) = 0.84714752;
-
-    detail::CameraParams  camera_left;
-    camera_left.focal = 2137.88;
-    camera_left.aspect = 1.0;
-    camera_left.ppx = 516.5;
-    camera_left.ppy = 290.5;
-    camera_left.R = left_R;
-    camera_left.t = Mat::zeros(3, 1, CV_64F);
-
-    Mat right_R(3, 3, CV_32F);
-    right_R.at<float>(0,0) = 0.98918295;
-    right_R.at<float>(0,1) = 0.074548103;
-    right_R.at<float>(0,2) = 0.12633191;
-    right_R.at<float>(1,0) = -1.2479756e-08;
-    right_R.at<float>(1,1) = 0.86123264;
-    right_R.at<float>(1,2) = -0.50821096;
-    right_R.at<float>(2,0) = -0.1466873;
-    right_R.at<float>(2,1) = 0.50271362;
-    right_R.at<float>(2,2) = 0.85191655;
-
-    detail::CameraParams camera_right;
-    camera_right.focal = 2119.94;
-    camera_right.aspect = 1.0;
-    camera_right.ppx = 516.5;
-    camera_right.ppy = 290.5;
-    camera_right.R = right_R;
-    camera_right.t = Mat::zeros(3, 1, CV_64F);
-
-    vector<detail::CameraParams> camera_params;
-    camera_params.push_back(camera_left);
-    camera_params.push_back(camera_right);
-    return camera_params;
-}
 
 
 int main(int argc, const char ** argv) {
@@ -67,12 +22,18 @@ int main(int argc, const char ** argv) {
     string left_filename(argv[1]);
     string right_filename(argv[2]);
     string output_filename(argv[3]);
-    uint16_t nb_workers(atoi(argv[4]));
+    string camera_params_filename(argv[4]);
+    uint16_t nb_workers(atoi(argv[5]));
 
     uint32_t pano_offset_x = 694;
     uint32_t pano_offset_y = 307;
     uint32_t pano_width = 8192;
     uint32_t pano_height = 2848;
+
+    spdlog::info("Loading Seam data: {}", camera_params_filename);
+    vector<detail::CameraParams> cameras_params(2);
+    vector<UMat> masks_warped(2);
+    readSeamData(camera_params_filename, cameras_params, masks_warped);
 
     spdlog::info("Loading file: {}", left_filename);
     spdlog::info("Loading file: {}", right_filename);
@@ -99,8 +60,6 @@ int main(int argc, const char ** argv) {
     left_processor.start();
     right_processor.start();
 
-    vector<detail::CameraParams> camera_params = buildCamParams();
-
     unordered_map<uint32_t, unique_ptr<VideoPacket>> left_video_packets;
     unordered_map<uint32_t, unique_ptr<VideoPacket>> right_video_packets;
 
@@ -121,7 +80,7 @@ int main(int argc, const char ** argv) {
 
     vector<unique_ptr<FrameStitcher>> frame_stitchers;
     for(uint16_t i=0; i < nb_workers; ++i) {
-        unique_ptr<FrameStitcher> fs(new FrameStitcher(pano_offset_x, pano_offset_y, pano_width, pano_height, stitcher_queue, output_encoder.getInPanoramicQueue(), camera_params, reference_bgr_value_idxs, reference_bgr_cumsum));
+        unique_ptr<FrameStitcher> fs(new FrameStitcher(pano_offset_x, pano_offset_y, pano_width, pano_height, stitcher_queue, output_encoder.getInPanoramicQueue(), cameras_params, masks_warped, reference_bgr_value_idxs, reference_bgr_cumsum));
         fs->start();
         frame_stitchers.push_back(move(fs));
     }
