@@ -17,10 +17,8 @@ using namespace std;
 
 OutputEncoder::OutputEncoder(
     const string& filename,
-    ThreadSafeQueue<AVPacket,
-    PacketDeleter>& left_audio_queue,
-    ThreadSafeQueue<AVPacket,
-    PacketDeleter>& right_audio_queue,
+    ThreadSafeQueue<AVPacket, PacketDeleter>& left_audio_queue,
+    ThreadSafeQueue<AVPacket, PacketDeleter>& right_audio_queue,
     uint32_t width,
     uint32_t height,
     bool use_left_audio,
