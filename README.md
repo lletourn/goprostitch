@@ -92,27 +92,33 @@ tar xvf vmaf-2.3.1.tar.gz
 # From Makefile modified for target dir
 cd third_party/libsvm && make lib
 cd ../..
-meson setup libvmaf/build libvmaf --buildtype release -Denable_float=true -Dprefix=/data/software/vmaf-2.3.1 && ninja -vC libvmaf/build
+meson setup libvmaf/build libvmaf --buildtype release -Denable_float=true -Dprefix=${HOME}/software/vmaf-2.3.1 && ninja -vC libvmaf/build
 cd python && python3 setup.py build_ext --build-lib .
 cd ..
 meson setup libvmaf/build libvmaf --buildtype release -Dprefix=${HOME}/software/vmaf-2.3.1 && ninja -vC libvmaf/build install
 
 
-wget https://ffmpeg.org/releases/ffmpeg-5.1.2.tar.gz -O ~/src/ffmpeg-5.1.2.tar.gz
-tar xvf ffmpeg-5.1.2.tar.gz
-cd ffmpeg-5.1.2
-./configure --prefix=${HOME}/software/ffmpeg-5.1.2 --enable-libxml2 --enable-libfreetype --enable-gpl --enable-libx264 --enable-libx265 --enable-libsvtav1 --enable-nonfree --enable-libopus --enable-libvpx --enable-openssl --enable-libvmaf --enable-shared
+wget https://ffmpeg.org/releases/ffmpeg-5.1.3.tar.gz -O ~/src/ffmpeg-5.1.3.tar.gz
+tar xvf ffmpeg-5.1.3.tar.gz
+cd ffmpeg-5.1.3
+./configure --prefix=${HOME}/software/ffmpeg-5.1.3 --enable-libxml2 --enable-libfreetype --enable-gpl --enable-libx264 --enable-libx265 --enable-libsvtav1 --enable-nonfree --enable-libopus --enable-libvpx --enable-openssl --enable-libvmaf --enable-shared
+make -j $(nproc) && make install
 
 cd ~/src
-wget "https://github.com/gabime/spdlog/archive/refs/tags/v1.11.0.tar.gz" -O ~/src/spdlog-1.11.0.tar.gz
-rm -rf build ; mkdir build ; cd build ; cmake -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=${HOME}/software/spdlog-1.11.0 ../ && make -j4 && make install
+wget "https://github.com/gabime/spdlog/archive/refs/tags/v1.12.0.tar.gz" -O ~/src/spdlog-1.12.0.tar.gz
+rm -rf build ; mkdir build ; cd build ; cmake -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=${HOME}/software/spdlog-1.12.0 ../ && make -j $(nproc) && make install
 
 
 wget "https://github.com/opencv/opencv/archive/refs/tags/4.7.0.tar.gz" -O ~/src/opencv-4.7.0.tar.gz
 wget "https://github.com/opencv/opencv_contrib/archive/refs/tags/4.7.0.tar.gz" -O ~/src/opencv_contrib-4.7.0.tar.gz
 tar xvf opencv-4.7.0.tar.gz
 tar xvf opencv_contrib-4.7.0.tar.gz
-rm -rf build ; mkdir build ; cd build ; cmake -DENABLE_CXX11=ON -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=${HOME}/software/opencv-4.7.0 -DBUILD_opencv_python2=OFF -DOPENCV_EXTRA_MODULES_PATH=/home/ubuntu/src/opencv_contrib-4.7.0/modules -DENABLE_FAST_MATH=1 ../
+cd opencv-4.7.0
+rm -rf build ; mkdir build ; cd build ; cmake -DENABLE_CXX11=ON -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=${HOME}/software/opencv-4.7.0 -DBUILD_opencv_python2=OFF -DOPENCV_EXTRA_MODULES_PATH=${HOME}/src/opencv_contrib-4.7.0/modules -DENABLE_FAST_MATH=1 ../
+
+# Add these on desktop
+# -DBUILD_EXAMPLES=ON -DINSTALL_C_EXAMPLES=ON -DINSTALL_BIN_EXAMPLES=ON -DWITH_GTK=ON
+rm -rf build ; mkdir build ; cd build ; cmake -DENABLE_CXX11=ON -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=${HOME}/software/opencv-4.7.0 -DWITH_TBB=ON -DBUILD_opencv_python2=OFF -DOPENCV_EXTRA_MODULES_PATH=${HOME}/src/opencv_contrib-4.7.0/modules -DWITH_CUDA=OFF -DWITH_OPENCL=OFF -DOPENCV_GENERATE_PKGCONFIG=ON -DOPENCV_ENABLE_NONFREE=ON ../ && make -j $(nproc) && make install
 ```
 
 # Compile
