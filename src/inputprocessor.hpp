@@ -16,7 +16,7 @@ extern "C" {
 
 class InputProcessor {
  public:
-    InputProcessor(const std::string& filename, uint32_t queue_size);
+    InputProcessor(const std::string& filename, uint32_t offset, uint32_t queue_size);
     ~InputProcessor();
 
     void initialize();
@@ -38,6 +38,7 @@ class InputProcessor {
 
  private:
     const std::string filename_;
+    const uint32_t offset_;
     uint64_t timecode_;
     bool running_;
     std::atomic<bool> done_;

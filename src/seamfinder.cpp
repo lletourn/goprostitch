@@ -28,6 +28,7 @@
 #include "opencv2/xfeatures2d.hpp"
 #include "opencv2/xfeatures2d/nonfree.hpp"
 #endif
+#include "seamreader.hpp"
 
 using namespace std;
 using namespace cv;
@@ -77,7 +78,6 @@ void writeStitchingData(const vector<CameraParams>& cameras, const vector<UMat>&
         camera.AddMember("ppx", Value(camera_params.ppx), cameras_doc.GetAllocator());
         camera.AddMember("ppy", Value(camera_params.ppy), cameras_doc.GetAllocator());
 
-
         if(camera_params.R.depth() == CV_32F)
             spdlog::info("R is 32bit float");
         else if(camera_params.R.depth() == CV_64F)
@@ -116,52 +116,6 @@ void writeStitchingData(const vector<CameraParams>& cameras, const vector<UMat>&
     cameras_doc.Accept(writer);
 }
 
-void readStitchingData(const string& cameras_filename, vector<CameraParams>& cameras, vector<UMat>& masks_warped) {
-    rapidjson::Document cameras_doc;
-    ifstream ifs(cameras_filename);
-    rapidjson::IStreamWrapper isw(ifs);
-    cameras_doc.ParseStream(isw);
-
-    filesystem::path file_path = filesystem::canonical(cameras_filename);
-    uint32_t cam_idx = 0;
-    Mat tmp;
-    for(const auto& camera : cameras_doc.GetArray()) {
-        stringstream ss;
-        ss << "warped_seam_mask_" << cam_idx << ".png";
-        string image_name = file_path.replace_filename(ss.str());
-        cout << image_name << endl;
-
-        tmp = imread(image_name, IMREAD_GRAYSCALE);
-        UMat img;
-        tmp.copyTo(img);
-        spdlog::info("Mask type: {}", type2str(img.type()));
-        masks_warped.push_back(img);
-
-        CameraParams cp;
-        cp.R = Mat::eye(3, 3, CV_32F); // Seems it needs to be floats not doubles
-        cp.aspect = camera["aspect"].GetDouble();
-        cp.focal = camera["focal"].GetDouble();
-        cp.ppx = camera["ppx"].GetDouble();
-        cp.ppy = camera["ppy"].GetDouble();
-
-        const Value& R = camera["R"];
-        for(uint32_t i=0; i < R.Size(); ++i) {
-            for(uint32_t j=0; j < R[i].Size(); ++j) {
-                cp.R.at<float>(i, j) = R[i][j].GetFloat();
-            }
-        }
-
-        const Value& t = camera["t"];
-        for(uint32_t i=0; i < t.Size(); ++i) {
-            cp.t.at<double>(i) = t[i].GetDouble();
-        }
-
-        cameras.push_back(cp);
-        cout << "Initial camera intrinsics #" << cam_idx+1 << ":\nK:\n" << cp.K() << "\nR:\n" << cp.R << endl;
-        cam_idx++;
-    }
-}
-
 float compute_warped_image_scale(const vector<CameraParams>& cameras) {
     // Find median focal length
     vector<double> focals;
@@ -198,7 +152,7 @@ int main(int argc, char* argv[]) {
     vector<UMat> masks_warped;
 
     if(argc > 4) {
-        readStitchingData(argv[4], cameras, masks_warped);
+        readSeamData(argv[4], cameras, masks_warped);
     } else {
         finding(img_names, cameras, masks_warped);
         writeStitchingData(cameras, masks_warped);
@@ -258,7 +212,7 @@ float blend_strength = 5;
         // Read image and resize it if necessary
         ss << "Reading: [" << img_idx << "] " << img_names[img_idx];
         spdlog::info(ss.str()); ss.str(string()); ss.clear();
-        img = imread(samples::findFile(img_names[img_idx]));
+        img = full_imgs[img_idx];
         Size img_size = img.size();
 
         Mat K;
@@ -321,7 +275,10 @@ float blend_strength = 5;
     Mat result, result_mask;
     blender->blend(result, result_mask);
 
-    imwrite(result_name, result);
+    Mat m;
+    result.convertTo(m, CV_8UC3);
+    cout << "Res type: " << type2str(m.type()) << endl;
+    imwrite(result_name, m);
 }
 
 

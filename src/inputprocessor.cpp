@@ -11,8 +11,8 @@ extern "C" {
 
 using namespace std;
 
-InputProcessor::InputProcessor(const string& filename, uint32_t queue_size)
-: filename_(filename), timecode_(0), running_(false), done_(false), video_packet_queue_(queue_size), audio_packet_queue_(queue_size), video_time_base_(Rational(0,0)), audio_time_base_(Rational(0,0)) {
+InputProcessor::InputProcessor(const string& filename, uint32_t offset, uint32_t queue_size)
+: filename_(filename), offset_(offset), timecode_(0), running_(false), done_(false), video_packet_queue_(queue_size), audio_packet_queue_(queue_size), video_time_base_(Rational(0,0)), audio_time_base_(Rational(0,0)) {
     av_format_ctx_ = NULL;
 }
 
@@ -158,27 +158,29 @@ void InputProcessor::run() {
                     throw runtime_error("Error occured");
                 }
 
-                uint32_t data_size = av_image_get_buffer_size(video_codec_ctx_->pix_fmt, video_codec_ctx_->width, video_codec_ctx_->height, 1);
-                unique_ptr<uint8_t> data(new uint8_t[data_size]);
-                av_image_copy_to_buffer(data.get(), data_size, video_frame->data, video_frame->linesize, video_codec_ctx_->pix_fmt, video_codec_ctx_->width, video_codec_ctx_->height, 1);
+                if(video_idx >= offset_) {
+                    uint32_t data_size = av_image_get_buffer_size(video_codec_ctx_->pix_fmt, video_codec_ctx_->width, video_codec_ctx_->height, 1);
+                    unique_ptr<uint8_t> data(new uint8_t[data_size]);
+                    av_image_copy_to_buffer(data.get(), data_size, video_frame->data, video_frame->linesize, video_codec_ctx_->pix_fmt, video_codec_ctx_->width, video_codec_ctx_->height, 1);
 
-                unique_ptr<VideoPacket> input_packet(new VideoPacket);
-                input_packet->width = video_codec_ctx_->width;
-                input_packet->height = video_codec_ctx_->height;
-                input_packet->pts = video_frame->pts;
-                input_packet->pts_time =  video_frame->pts * av_q2d(av_format_ctx_->streams[video_stream_]->time_base);
-                input_packet->idx = video_idx;
-                input_packet->data_size = data_size;
-                input_packet->data = move(data);
-                ++video_idx;
+                    unique_ptr<VideoPacket> input_packet(new VideoPacket);
+                    input_packet->width = video_codec_ctx_->width;
+                    input_packet->height = video_codec_ctx_->height;
+                    input_packet->pts = video_frame->pts;
+                    input_packet->pts_time =  video_frame->pts * av_q2d(av_format_ctx_->streams[video_stream_]->time_base);
+                    input_packet->idx = video_idx-offset_;
+                    input_packet->data_size = data_size;
+                    input_packet->data = move(data);
 
-                auto delta = chrono::duration_cast<chrono::milliseconds>(chrono::steady_clock::now() - video_start).count();
-                double video_fps = (1.0/delta) * 1000.0;
+                    auto delta = chrono::duration_cast<chrono::milliseconds>(chrono::steady_clock::now() - video_start).count();
+                    double video_fps = (1.0/delta) * 1000.0;
  
-                video_packet_queue_.push(move(input_packet));
-                // delta = chrono::duration_cast<chrono::milliseconds>(chrono::steady_clock::now() - start).count();
-                // double all_fps = ((double)video_idx/delta) * 1000.0;
-                // spdlog::debug("Input FPS: {} All FPS: {}", video_fps, all_fps);
+                    video_packet_queue_.push(move(input_packet));
+                    // delta = chrono::duration_cast<chrono::milliseconds>(chrono::steady_clock::now() - start).count();
+                    // double all_fps = ((double)video_idx/delta) * 1000.0;
+                    // spdlog::debug("Input FPS: {} All FPS: {}", video_fps, all_fps);
+                }
+                ++video_idx;
             }
         } else if (packet->stream_index == audio_stream_) {
             AVPacket* audio_packet = av_packet_alloc();

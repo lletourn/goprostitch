@@ -15,8 +15,28 @@ extern "C" {
 
 using namespace std;
 
-OutputEncoder::OutputEncoder(const string& filename, ThreadSafeQueue<AVPacket, PacketDeleter>& left_audio_queue, ThreadSafeQueue<AVPacket, PacketDeleter>& right_audio_queue, uint32_t width, uint32_t height, Rational video_time_base, Rational audio_time_base, uint32_t queue_size)
-: filename_(filename), running_(false), done_(false), video_width_(width), video_height_(height), video_time_base_(video_time_base), left_audio_packet_queue_(left_audio_queue), right_audio_packet_queue_(right_audio_queue), panoramic_packet_queue_(queue_size) {
+OutputEncoder::OutputEncoder(
+    const string& filename,
+    ThreadSafeQueue<AVPacket,
+    PacketDeleter>& left_audio_queue,
+    ThreadSafeQueue<AVPacket,
+    PacketDeleter>& right_audio_queue,
+    uint32_t width,
+    uint32_t height,
+    bool use_left_audio,
+    Rational video_time_base,
+    Rational audio_time_base,
+    uint32_t queue_size)
+: filename_(filename),
+  use_left_audio_(use_left_audio),
+  running_(false),
+  done_(false),
+  video_width_(width),
+  video_height_(height),
+  video_time_base_(video_time_base),
+  left_audio_packet_queue_(left_audio_queue),
+  right_audio_packet_queue_(right_audio_queue),
+  panoramic_packet_queue_(queue_size) {
     audio_time_base_ = (AVRational){(int)audio_time_base.num, (int)audio_time_base.den};
 };
 
@@ -62,7 +82,7 @@ void OutputEncoder::initialize(const AVCodecParameters* left_audio_codec_paramet
 
     init_video();
     left_audio_stream_ = init_audio(left_audio_codec_parameters, "Left");
-    right_audio_stream_ = init_audio(right_audio_codec_parameters, "Left");
+    right_audio_stream_ = init_audio(right_audio_codec_parameters, "Right");
     
     int32_t ret;
     ret = avio_open(&av_format_ctx_->pb, filename_.c_str(), AVIO_FLAG_WRITE);
@@ -86,8 +106,8 @@ void OutputEncoder::init_video() {
         throw runtime_error("Could not allocate video stream");
     }
 
-    video_codec_ = avcodec_find_encoder(AV_CODEC_ID_HEVC);
-    // video_codec_ = avcodec_find_encoder(AV_CODEC_ID_H264);
+    //video_codec_ = avcodec_find_encoder(AV_CODEC_ID_HEVC);
+    video_codec_ = avcodec_find_encoder(AV_CODEC_ID_H264);
     if (!video_codec_) {
         spdlog::error("Video codec not found");
         throw runtime_error("Video codec not found");
@@ -99,10 +119,12 @@ void OutputEncoder::init_video() {
         throw runtime_error("Could not allocate video codec context");
     }
 
+
     AVDictionary *opt=NULL;
-    av_dict_set(&opt, "x265-params", "pools=16", 0);
+    video_codec_ctx_->thread_count = 1; // x264
+    //av_dict_set(&opt, "x265-params", "pools=16", 0);
     av_dict_set(&opt, "crf", "24", 0);
-    av_dict_set(&opt, "preset", "slow", 0);
+    av_dict_set(&opt, "preset", "fast", 0);
     av_dict_set(&opt, "keyint", "600", 0);
 
     video_codec_ctx_->pix_fmt = AV_PIX_FMT_YUV420P;
@@ -209,11 +231,17 @@ void OutputEncoder::run() {
     chrono::steady_clock::time_point start = chrono::steady_clock::now();
     unordered_map<uint32_t, unique_ptr<PanoramicPacket>> video_packets;
     double prev_delta = 0;
+    double read_left_audio = std::numeric_limits<double>::max();
+    double read_right_audio = std::numeric_limits<double>::max();
     while(running_) {
         while(true) {
             unique_ptr<AVPacket, PacketDeleter> audio_packet(left_audio_packet_queue_.pop(audio_wait));
             if(audio_packet) {
-                left_audio_packets_.push(move(audio_packet));
+                double pts_time = audio_packet->pts * av_q2d(left_audio_stream_->time_base);
+                if(use_left_audio_ || pts_time >= read_right_audio)
+                    left_audio_packets_.push(move(audio_packet));
+                if(read_left_audio == std::numeric_limits<double>::max())
+                    read_left_audio = pts_time;
             } else {
                 break;
             }
@@ -221,7 +249,11 @@ void OutputEncoder::run() {
         while(true) {
             unique_ptr<AVPacket, PacketDeleter> audio_packet(right_audio_packet_queue_.pop(audio_wait));
             if(audio_packet) {
-                right_audio_packets_.push(move(audio_packet));
+                double pts_time = audio_packet->pts * av_q2d(left_audio_stream_->time_base);
+                if(!use_left_audio_ || pts_time >= read_left_audio)
+                    right_audio_packets_.push(move(audio_packet));
+                if(read_right_audio == std::numeric_limits<double>::max())
+                    read_right_audio = pts_time;
             } else {
                 break;
             }
@@ -236,12 +268,6 @@ void OutputEncoder::run() {
         while(video_packets.find(frame_idx) != video_packets.end()) {
             unique_ptr<PanoramicPacket> current_panoramic_packet(move(video_packets[frame_idx]));
             video_packets.erase(frame_idx);
-            // if(frame_idx == 0) {
-            //     cv::Mat img_yuv(video_frame_->height *3/2, video_frame_->width, CV_8UC1, current_panoramic_packet->data.get());
-            //     cv::Mat img;
-            //     cv::cvtColor(img_yuv, img, cv::COLOR_YUV2BGR_I420);
-            //     cv::imwrite("first_pano.png", img); 
-            // }
             ++frame_idx;
 
             //raise(SIGINT);

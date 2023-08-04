@@ -33,7 +33,7 @@ add_executable(teststitcher ${CMAKE_SOURCE_DIR}/src/teststitcher.cpp ${CMAKE_SOU
 set_property(TARGET teststitcher PROPERTY CXX_STANDARD 17)
 target_link_libraries(teststitcher PRIVATE PkgConfig::LIBAV ${OpenCV_LIBS} spdlog::spdlog)
 
-add_executable(seamfinder ${CMAKE_SOURCE_DIR}/src/seamfinder.cpp)
+add_executable(seamfinder ${CMAKE_SOURCE_DIR}/src/seamfinder.cpp ${CMAKE_SOURCE_DIR}/src/seamreader.cpp)
 set_property(TARGET seamfinder PROPERTY CXX_STANDARD 17)
 target_link_libraries(seamfinder PRIVATE PkgConfig::LIBAV ${OpenCV_LIBS} spdlog::spdlog)
 

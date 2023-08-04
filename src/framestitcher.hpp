@@ -47,4 +47,5 @@ class FrameStitcher {
 
     std::thread thread_;
 
+    float warped_image_scale_;
 };

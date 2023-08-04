@@ -6,9 +6,11 @@
 
 #include <opencv2/opencv.hpp>
 #include <opencv2/stitching.hpp>
+#include "opencv2/stitching/detail/blenders.hpp"
 #include <csignal>
 using namespace std;
 using namespace cv;
+using namespace cv::detail;
 
 void FrameStitcher::BuildReferenceHistogram(uint8_t* reference_data, uint32_t width, uint32_t height, vector<vector<uint32_t>>& bgr_value_idxs, vector<vector<double>>& bgr_cumsum) {
     vector<Mat> bgr_planes;
@@ -141,6 +143,18 @@ FrameStitcher::FrameStitcher(
   reference_bgr_cumsum_(reference_bgr_cumsum),
   running_(false),
   done_(false) {
+
+    // Find median focal length
+    vector<double> focals;
+    for (size_t i = 0; i < camera_params_.size(); ++i) {
+        focals.push_back(camera_params_[i].focal);
+    }
+
+    sort(focals.begin(), focals.end());
+    if (focals.size() % 2 == 1)
+        warped_image_scale_ = static_cast<float>(focals[focals.size() / 2]);
+    else
+        warped_image_scale_ = static_cast<float>(focals[focals.size() / 2 - 1] + focals[focals.size() / 2]) * 0.5f;
 }
 
 
@@ -170,19 +184,89 @@ bool FrameStitcher::is_done() {
 } 
 
 void FrameStitcher::stitch(const vector<Mat>& images, Mat& panoramic_image) {
-    Ptr<Stitcher> stitcher(Stitcher::create(Stitcher::PANORAMA));
-    Stitcher::Status status = stitcher->setTransform(images, camera_params_);
-    if (status != Stitcher::OK) {
-        spdlog::error("Can't set transform values: {}", int(status));
-        throw runtime_error("Can't set transform values");
-    }   
-
-    stitcher->composePanorama(panoramic_image);
-    if (status != Stitcher::OK) {
-        spdlog::error("Couldn't compose image: {}", int(status));
-        throw runtime_error("Couldn't compose image");
+    int num_images = static_cast<int>(images.size());
+    vector<Size> sizes(num_images);
+    
+    Mat img;
+    Ptr<WarperCreator> warper_creator = makePtr<cv::CylindricalWarper>();
+    if (!warper_creator) {
+        spdlog::error("Can't create the Cylindrical warper");
     }
-    stitcher.release();
+
+    Ptr<RotationWarper> warper = warper_creator->create(warped_image_scale_);
+int blend_type = Blender::NO;
+float blend_strength = 5;
+
+    Mat img_warped, img_warped_s;
+    Mat dilated_mask, seam_mask, mask, mask_warped;
+    Ptr<Blender> blender;
+    //double compose_seam_aspect = 1;
+    double compose_work_aspect = 1;
+    bool is_compose_scale_set = false;
+    double compose_scale = 1;
+
+    vector<Point> corners(num_images);
+    for (int i = 0; i < num_images; ++i) {
+        // Update corner and size
+        Size sz = images[i].size();
+
+        Mat K;
+        camera_params_[i].K().convertTo(K, CV_32F);
+        Rect roi = warper->warpRoi(sz, K, camera_params_[i].R);
+        corners[i] = roi.tl();
+        sizes[i] = roi.size();
+    }
+
+    for (int img_idx = 0; img_idx < num_images; ++img_idx) {
+        img = images[img_idx];
+        Size img_size = img.size();
+
+        Mat K;
+        camera_params_[img_idx].K().convertTo(K, CV_32F);
+
+        // Warp the current image
+        warper->warp(img, K, camera_params_[img_idx].R, INTER_LINEAR, BORDER_REFLECT, img_warped);
+
+        // Warp the current image mask
+        mask.create(img_size, CV_8U);
+        mask.setTo(Scalar::all(255));
+        warper->warp(mask, K, camera_params_[img_idx].R, INTER_NEAREST, BORDER_CONSTANT, mask_warped);
+
+        img_warped.convertTo(img_warped_s, CV_16S);
+        img_warped.release();
+        img.release();
+        mask.release();
+
+        dilate(image_masks_[img_idx], dilated_mask, Mat());
+        resize(dilated_mask, seam_mask, mask_warped.size(), 0, 0, INTER_LINEAR_EXACT);
+        mask_warped = seam_mask & mask_warped;
+
+        if (!blender) {
+            blender = Blender::createDefault(blend_type, false);
+            Rect roi = resultRoi(corners, sizes);
+            Size dst_sz = roi.size();
+            float blend_width = sqrt(static_cast<float>(dst_sz.area())) * blend_strength / 100.f;
+            if (blend_width < 1.f)
+                blender = Blender::createDefault(Blender::NO, false);
+            else if (blend_type == Blender::MULTI_BAND)
+            {
+                MultiBandBlender* mb = dynamic_cast<MultiBandBlender*>(blender.get());
+                mb->setNumBands(static_cast<int>(ceil(log(blend_width)/log(2.)) - 1.));
+            }
+            else if (blend_type == Blender::FEATHER)
+            {
+                FeatherBlender* fb = dynamic_cast<FeatherBlender*>(blender.get());
+                fb->setSharpness(1.f/blend_width);
+            }
+            blender->prepare(corners, sizes);
+        }
+
+        blender->feed(img_warped_s, mask_warped, corners[img_idx]);
+    }
+
+    Mat result, result_mask;
+    blender->blend(result, result_mask);
+    result.convertTo(panoramic_image, CV_8UC3);
 }
 
 void FrameStitcher::run() {
@@ -190,11 +274,10 @@ void FrameStitcher::run() {
     pthread_setname_np(pthread_self(), "FrameStitcher");
     #endif
    
-    int32_t panoramic_width = -1;
-    int32_t panoramic_height = -1;
     vector<Mat> images(2);
     Mat panoramic_image;
     Mat panoramic_image_yuv;
+    Mat rs;
     while(running_) {
         unique_ptr<LeftRightPacket> left_right_packet(stitcher_queue_.pop(chrono::seconds(1)));
         if(left_right_packet) {
@@ -209,8 +292,8 @@ void FrameStitcher::run() {
 
             stitch(images, panoramic_image);
 
-            Mat cropped_image(panoramic_image, Range(crop_offset_y_, crop_offset_y_+crop_height_), Range(crop_offset_x_, crop_offset_x_+crop_width_));
-
+            Mat cropped_image(panoramic_image, Range(crop_offset_y_, crop_offset_y_+crop_height_*4), Range(crop_offset_x_, crop_offset_x_+crop_width_*4));
+            resize(panoramic_image, rs, Size(crop_width_, crop_height_), INTER_LINEAR);
             cvtColor(cropped_image, panoramic_image_yuv, COLOR_BGR2YUV_I420);
 
             unique_ptr<PanoramicPacket> pano_packet(new PanoramicPacket);

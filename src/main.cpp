@@ -22,26 +22,39 @@ int main(int argc, const char ** argv) {
     string left_filename(argv[1]);
     string right_filename(argv[2]);
     string output_filename(argv[3]);
-    string camera_params_filename(argv[4]);
-    uint16_t nb_workers(atoi(argv[5]));
+    int32_t video_offset(atoi(argv[4])); // Positive offsets shifts right and takes left audio. Negative is the opposite
+    string camera_params_filename(argv[5]);
+    uint16_t nb_workers(atoi(argv[6]));
 
-    uint32_t pano_offset_x = 694;
-    uint32_t pano_offset_y = 307;
-    uint32_t pano_width = 8192;
-    uint32_t pano_height = 2848;
+    uint32_t left_offset;
+    uint32_t right_offset;
+    bool use_left_audio = true;
+    if(video_offset >= 0) {
+        left_offset = 0;
+        right_offset = video_offset;
+    } else {
+        left_offset = -1*video_offset;
+        right_offset = 0;
+        use_left_audio = false;
+    }
+    
+    uint32_t pano_offset_x = 551;
+    uint32_t pano_offset_y = 175;
+    uint32_t pano_width = 5632/4;
+    uint32_t pano_height = 2160/4;
 
     spdlog::info("Loading Seam data: {}", camera_params_filename);
-    vector<detail::CameraParams> cameras_params(2);
-    vector<UMat> masks_warped(2);
+    vector<detail::CameraParams> cameras_params;
+    vector<UMat> masks_warped;
     readSeamData(camera_params_filename, cameras_params, masks_warped);
 
     spdlog::info("Loading file: {}", left_filename);
     spdlog::info("Loading file: {}", right_filename);
 
     const uint32_t input_queue_size = 2;
-    InputProcessor left_processor(left_filename, input_queue_size);
+    InputProcessor left_processor(left_filename, left_offset, input_queue_size);
     left_processor.initialize();
-    InputProcessor right_processor(right_filename, input_queue_size);
+    InputProcessor right_processor(right_filename, right_offset, input_queue_size);
     right_processor.initialize();
 
     spdlog::info("Left duratiaon: {}", left_processor.duration());
@@ -52,7 +65,7 @@ int main(int argc, const char ** argv) {
     ThreadSafeQueue<LeftRightPacket> stitcher_queue(input_queue_size*3);
 
     spdlog::info("Writting file: {}", output_filename);
-    OutputEncoder output_encoder(output_filename, left_processor.getOutAudioQueue(), right_processor.getOutAudioQueue(), pano_width, pano_height, left_processor.video_time_base(), left_processor.audio_time_base(), input_queue_size);
+    OutputEncoder output_encoder(output_filename, left_processor.getOutAudioQueue(), right_processor.getOutAudioQueue(), pano_width, pano_height, use_left_audio, left_processor.video_time_base(), left_processor.audio_time_base(), input_queue_size);
     output_encoder.initialize(left_processor.audio_codec_parameters(), right_processor.audio_codec_parameters(), duration);
 
     // Start IO Threads
