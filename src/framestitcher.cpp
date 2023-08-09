@@ -292,8 +292,8 @@ void FrameStitcher::run() {
 
             stitch(images, panoramic_image);
 
-            Mat cropped_image(panoramic_image, Range(crop_offset_y_, crop_offset_y_+crop_height_*4), Range(crop_offset_x_, crop_offset_x_+crop_width_*4));
-            resize(panoramic_image, rs, Size(crop_width_, crop_height_), INTER_LINEAR);
+            Mat cropped_image(panoramic_image, Range(crop_offset_y_, crop_offset_y_+crop_height_), Range(crop_offset_x_, crop_offset_x_+crop_width_));
+
             cvtColor(cropped_image, panoramic_image_yuv, COLOR_BGR2YUV_I420);
 
             unique_ptr<PanoramicPacket> pano_packet(new PanoramicPacket);
