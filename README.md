@@ -67,7 +67,8 @@ export PKG_CONFIG_PATH=${SVTAV1_INSTALL_DIR}/lib/pkgconfig:${PKG_CONFIG_PATH}
 
 
 ```
-sudo apt install -y ec2-instance-connect pigz python3 yasm nasm libvpx-dev libopus-dev libssl-dev libfreetype6-dev libx264-dev libx265-dev libpython3-all-dev python3-dev python3-distutils pkg-config libopenblas-dev libeigen3-dev libxml2-dev rapidjson-dev zipmerge liblapack-dev build-essential cmake meson
+sudo apt install -y ec2-instance-connect pigz python3 yasm nasm libvpx-dev libopus-dev libssl-dev libfreetype6-dev libx264-dev libx265-dev libpython3-all-dev python3-dev python3-distutils pkg-config libopenblas-dev libeigen3-dev libxml2-dev rapidjson-dev zipmerge liblapack-dev build-essential cmake meson qt6-base-dev libqt6core5compat6-dev
+
 # It's too old for the moment:
 # libsvtav1-dev svt-av1
 
@@ -117,7 +118,7 @@ cd opencv-4.7.0
 rm -rf build ; mkdir build ; cd build ; cmake -DENABLE_CXX11=ON -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=${HOME}/software/opencv-4.7.0 -DBUILD_opencv_python2=OFF -DOPENCV_EXTRA_MODULES_PATH=${HOME}/src/opencv_contrib-4.7.0/modules -DENABLE_FAST_MATH=1 ../
 
 # Add these on desktop
-# -DBUILD_EXAMPLES=ON -DINSTALL_C_EXAMPLES=ON -DINSTALL_BIN_EXAMPLES=ON -DWITH_GTK=ON
+# -DBUILD_EXAMPLES=ON -DINSTALL_C_EXAMPLES=ON -DINSTALL_BIN_EXAMPLES=ON -DWITH_GTK=OFF -DWITH_QT=ON -DWITH_OPENGL=ON
 rm -rf build ; mkdir build ; cd build ; cmake -DENABLE_CXX11=ON -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=${HOME}/software/opencv-4.7.0 -DWITH_TBB=ON -DBUILD_opencv_python2=OFF -DOPENCV_EXTRA_MODULES_PATH=${HOME}/src/opencv_contrib-4.7.0/modules -DWITH_CUDA=OFF -DWITH_OPENCL=OFF -DOPENCV_GENERATE_PKGCONFIG=ON -DOPENCV_ENABLE_NONFREE=ON ../ && make -j $(nproc) && make install
 ```
 
