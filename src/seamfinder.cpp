@@ -60,9 +60,9 @@ std::string type2str(int type) {
 }
 
 
-void compositing(const vector<string>& img_names, const string& result_name, const Mat& K, const Mat& distortion_coefficients, const Size& calibration_image_size, const vector<CameraParams>& cameras, const vector<UMat>& masks_warped);
+void compositing(const vector<string>& img_names, const string& result_name, const vector<CameraParams>& cameras, const vector<UMat>& masks_warped);
 
-void finding(const vector<string>& img_names, const Mat& K, const Mat& distortion_coefficients, const Size& calibration_image_size, vector<CameraParams>& cameras, vector<UMat>& masks_warped);
+void finding(const vector<string>& img_names, const vector<PointPair>& point_pairs, vector<CameraParams>& cameras, vector<UMat>& masks_warped);
 
 void writeStitchingData(const vector<CameraParams>& cameras, const vector<UMat>& masks_warped) {
     rapidjson::Document cameras_doc(kArrayType);
@@ -147,7 +147,7 @@ int main(int argc, char* argv[]) {
         "{help h usage ? | | print this message }"
         "{left |<none>| Left image }"
         "{right |<none>| Right image }"
-        "{calibration |<none>| Intrinsic camera parameters json filename}"
+        "{keypoints | | Left-Right keypoints json filename}"
         "{output |<none>| Output panorama }"
         "{camparams | | Camera parameter filename }"
         "{findcamparams | true | Generate camera parameters or read them from the file }"
@@ -156,33 +156,35 @@ int main(int argc, char* argv[]) {
     CommandLineParser parser(argc, argv, keys);
     parser.about("Seam finder");
 
+    if(parser.has("help")) {
+        parser.printMessage();
+        return 0;
+    }
+
     vector<string> img_names;
     img_names.push_back(parser.get<string>("left"));
     img_names.push_back(parser.get<string>("right"));
-    string calibration_filename = parser.get<string>("calibration");
     string result_name = parser.get<string>("output");;
 
     int num_images = static_cast<int>(img_names.size());
 
-    Mat K;
-    Mat distortion_coefficients;
-    Size calibration_image_size;
-    readCalibration(calibration_filename, K, distortion_coefficients, calibration_image_size);
-  
     vector<CameraParams> cameras;
     vector<UMat> masks_warped;
 
     if(!parser.get<bool>("findcamparams")) {
         readSeamData(argv[5], cameras, masks_warped);
     } else {
-        finding(img_names, K, distortion_coefficients, calibration_image_size, cameras, masks_warped);
+        vector<PointPair> point_pairs;
+        if(parser.has("keypoints"))
+            point_pairs = readPointPairs(parser.get<string>("keypoints"));
+        finding(img_names, point_pairs, cameras, masks_warped);
         writeStitchingData(cameras, masks_warped);
     }
 
-    compositing(img_names, result_name, K, distortion_coefficients, calibration_image_size, cameras, masks_warped);
+    compositing(img_names, result_name, cameras, masks_warped);
 }
 
-void compositing(const vector<string>& img_names, const string& result_name, const Mat& K, const Mat& distortion_coefficients, const Size& calibration_image_size, const vector<CameraParams>& cameras, const vector<UMat>& masks_warped) {
+void compositing(const vector<string>& img_names, const string& result_name, const vector<CameraParams>& cameras, const vector<UMat>& masks_warped) {
     int num_images = static_cast<int>(img_names.size());
     vector<Mat> full_imgs(num_images);
     vector<Size> sizes(num_images);
@@ -200,12 +202,6 @@ void compositing(const vector<string>& img_names, const string& result_name, con
     spdlog::info("Compositing...");
 int blend_type = Blender::NO;
 float blend_strength = 5;
-
-    Mat view, rview, map1, map2;
-    Mat optimized_camera_matrix = getOptimalNewCameraMatrix(K, distortion_coefficients, calibration_image_size, 0);
-    initUndistortRectifyMap(K, distortion_coefficients, Mat(), optimized_camera_matrix, calibration_image_size,  CV_16SC2, map1, map2);
-    remap(full_imgs[0], full_imgs[0], map1, map2, INTER_LINEAR);
-    remap(full_imgs[1], full_imgs[1], map1, map2, INTER_LINEAR);
 
     Mat img_warped, img_warped_s;
     Mat dilated_mask, seam_mask, mask, mask_warped;
@@ -309,117 +305,39 @@ float blend_strength = 5;
 }
 
 
-void finding(const vector<string>& img_names, const Mat& K, const Mat& distortion_coefficients, const Size& calibration_image_size, vector<CameraParams>& cameras, vector<UMat>& masks_warped) {
-// Default command line args
-double work_megapix = -1;
-double seam_megapix = -1;
-double compose_megapix = -1;
-float conf_thresh = 0.1f;
-string features_type = "orb";
-//float match_conf = 0.65f;
-float match_conf = 0.3f;
-string ba_cost_func = "ray";
-string ba_refine_mask = "xxxxx";
-bool do_wave_correct = true;
-WaveCorrectKind wave_correct = detail::WAVE_CORRECT_HORIZ;
-bool save_graph = false;
-std::string save_graph_to;
-string seam_find_type = "gc_color";
-
-    // Check if have enough images
-    int num_images = static_cast<int>(img_names.size());
-    if (num_images < 2) {
-        spdlog::info("Need more images");
-    }
-
-    double work_scale = 1, seam_scale = 1;
-    bool is_work_scale_set = false, is_seam_scale_set = false;
+void featurePairAuto(const vector<Mat>& images, float conf_thresh, vector<ImageFeatures>& features, vector<MatchesInfo>& pairwise_matches) {
+    string features_type = "surf";
+    float match_conf = 0.65f;
 
     spdlog::info("Finding features...");
-
     Ptr<Feature2D> finder;
-    if (features_type == "orb")
-    {
+    if (features_type == "orb") {
         finder = ORB::create();
     }
-    else if (features_type == "akaze")
-    {
+    else if (features_type == "akaze") {
         finder = AKAZE::create();
     }
 #ifdef HAVE_OPENCV_XFEATURES2D
-    else if (features_type == "surf")
-    {
+    else if (features_type == "surf") {
         finder = xfeatures2d::SURF::create();
     }
 #endif
-    else if (features_type == "sift")
-    {
+    else if (features_type == "sift") {
         finder = SIFT::create();
     }
-    else
-    {
+    else {
         cout << "Unknown 2D features type: '" << features_type << "'.\n";
     }
 
-    Mat full_img, img;
-    vector<ImageFeatures> features(num_images);
-    vector<Mat> images(num_images);
-    vector<Size> full_img_sizes(num_images);
-    double seam_work_aspect = 1;
-
-    Mat view, rview, map1, map2;
-    Mat optimized_camera_matrix = getOptimalNewCameraMatrix(K, distortion_coefficients, calibration_image_size, 0);
-    initUndistortRectifyMap(K, distortion_coefficients, Mat(), optimized_camera_matrix, calibration_image_size,  CV_16SC2, map1, map2);
-    spdlog::info("Built rectifying maps");
-    for (int i = 0; i < num_images; ++i)
-    {
-        full_img = imread(samples::findFile(img_names[i]));
-        spdlog::info("Read image");
-        remap(full_img, full_img, map1, map2, INTER_LINEAR);
-        spdlog::info("Remapped image");
-        full_img_sizes[i] = full_img.size();
-
-        if (full_img.empty())
-        {
-            spdlog::info("Can't open image ");
-            spdlog::info(img_names[i]);
-        }
-        if (work_megapix < 0)
-        {
-            img = full_img;
-            work_scale = 1;
-            is_work_scale_set = true;
-        }
-        else
-        {
-            if (!is_work_scale_set)
-            {
-                work_scale = min(1.0, sqrt(work_megapix * 1e6 / full_img.size().area()));
-                is_work_scale_set = true;
-            }
-            resize(full_img, img, Size(), work_scale, work_scale, INTER_LINEAR_EXACT);
-        }
-        if (!is_seam_scale_set)
-        {
-            seam_scale = min(1.0, sqrt(seam_megapix * 1e6 / full_img.size().area()));
-            seam_work_aspect = seam_scale / work_scale;
-            is_seam_scale_set = true;
-        }
-        cout << "SS: " << seam_scale << " WS: " << work_scale << " SWA: " << seam_work_aspect << endl;
-
-        computeImageFeatures(finder, img, features[i]);
+    for (int i = 0; i < images.size(); ++i) {
+        computeImageFeatures(finder, images[i], features[i]);
         features[i].img_idx = i;
         spdlog::info("Features in image #{}: {}", i+1, features[i].keypoints.size());
-
-        resize(full_img, img, Size(), seam_scale, seam_scale, INTER_LINEAR_EXACT);
-        images[i] = img.clone();
     }
-    cout << "FEatures: " << features.size() << endl;
-    full_img.release();
-    img.release();
+
+    cout << "Features: " << features.size() << endl;
 
     spdlog::info("Pairwise matching");
-    vector<MatchesInfo> pairwise_matches;
     Ptr<FeaturesMatcher> matcher;
     matcher = makePtr<BestOf2NearestMatcher>(false, match_conf);
 
@@ -435,33 +353,83 @@ string seam_find_type = "gc_color";
     imwrite("pair.png", pair_img);
 
     spdlog::info("Find matching images");
-    cout << "FEatures: " << features.size() << endl;
     // Leave only images we are sure are from the same panorama
     vector<int> indices = leaveBiggestComponent(features, pairwise_matches, conf_thresh);
-    cout << "FEatures big: " << features.size() << endl;
+    cout << "Features big: " << features.size() << endl;
     cout << "PW big: " << pairwise_matches.size() << endl;
     spdlog::info("Biggest component indices");
-    vector<Mat> img_subset;
-    vector<String> img_names_subset;
-    vector<Size> full_img_sizes_subset;
-    for (size_t i = 0; i < indices.size(); ++i)
-    {
-        img_names_subset.push_back(img_names[indices[i]]);
-        img_subset.push_back(images[indices[i]]);
-        full_img_sizes_subset.push_back(full_img_sizes[indices[i]]);
+}
+
+void featurePairManual(const vector<PointPair>& point_pairs, const vector<Size>& image_sizes, vector<ImageFeatures>& features, vector<MatchesInfo>& pairwise_matches) {
+
+    ImageFeatures feature_left;
+    feature_left.img_idx = 0;
+    feature_left.img_size = image_sizes[0];
+    ImageFeatures feature_right;
+    feature_right.img_idx = 1;
+    feature_right.img_size = image_sizes[1];
+
+    vector<Point2f> pts_left;
+    vector<Point2f> pts_right;
+    for(const PointPair& pp : point_pairs) {
+        pts_left.push_back(Point2f(pp.points[0].x, pp.points[0].y));
+        pts_right.push_back(Point2f(pp.points[1].x, pp.points[1].y));
+
+        feature_left.keypoints.push_back(KeyPoint((float)pp.points[0].x, (float)pp.points[0].y, 5.0));
+        feature_right.keypoints.push_back(KeyPoint((float)pp.points[1].x, (float)pp.points[1].y, 5.0));
     }
 
-    images = img_subset;
-    full_img_sizes = full_img_sizes_subset;
-
-    // Check if we still have enough images
-    num_images = static_cast<int>(img_names.size());
-    if (num_images < 2)
-    {
-        spdlog::info("Need more images: ");
-        spdlog::info(num_images);
+    MatchesInfo match_info;
+    match_info.src_img_idx = 0;
+    match_info.dst_img_idx = 1;
+    match_info.H = findHomography(pts_right, pts_left, RANSAC, 3, noArray(), 5000);
+    match_info.confidence = numeric_limits<double>::max();
+    for(uint32_t i=0; i < point_pairs.size(); ++i) {
+        DMatch match(i, i, 0.0);
+        match_info.matches.push_back(match);
     }
 
+    //std::vector<uchar> inliers_mask;    //!< Geometrically consistent matches mask
+    //int num_inliers;                    //!< Number of geometrically consistent matches
+    pairwise_matches.push_back(match_info);
+}
+
+void finding(const vector<string>& img_names, const vector<PointPair>& point_pairs, vector<CameraParams>& cameras, vector<UMat>& masks_warped) {
+float conf_thresh = 0.1f;
+string ba_cost_func = "ray";
+string ba_refine_mask = "xxxxx";
+bool do_wave_correct = true;
+WaveCorrectKind wave_correct = detail::WAVE_CORRECT_HORIZ;
+bool save_graph = false;
+std::string save_graph_to;
+string seam_find_type = "gc_color";
+
+    // Check if have enough images
+    int num_images = static_cast<int>(img_names.size());
+    if (num_images < 2) {
+        spdlog::info("Need more images");
+    }
+
+    Mat full_img;
+    vector<ImageFeatures> features(num_images);
+    vector<MatchesInfo> pairwise_matches;
+    vector<Mat> images(num_images);
+    vector<Size> full_img_sizes(num_images);
+
+    spdlog::info("Built rectifying maps");
+    for (int i = 0; i < num_images; ++i) {
+        full_img = imread(samples::findFile(img_names[i]));
+        spdlog::info("Read image");
+        full_img_sizes[i] = full_img.size();
+
+        images[i] = full_img.clone();
+    }
+    full_img.release();
+    if(point_pairs.empty())
+        featurePairAuto(images, conf_thresh, features, pairwise_matches);
+    else
+        featurePairManual(point_pairs, full_img_sizes, features, pairwise_matches);
+    
     spdlog::info("Build estimators");
     Ptr<Estimator> estimator = makePtr<HomographyBasedEstimator>();
 
@@ -471,12 +439,11 @@ string seam_find_type = "gc_color";
     }
 
     spdlog::info("Adjust cameras");
-    for (size_t i = 0; i < cameras.size(); ++i)
-    {
+    for (size_t i = 0; i < cameras.size(); ++i) {
         Mat R;
         cameras[i].R.convertTo(R, CV_32F);
         cameras[i].R = R;
-        cout << "Initial camera intrinsics #" << indices[i]+1 << ":\nK:\n" << cameras[i].K() << "\nR:\n" << cameras[i].R << endl;
+        cout << "Initial camera intrinsics #" << i << ":\nK:\n" << cameras[i].K() << "\nR:\n" << cameras[i].R << endl;
     }
 
     Ptr<detail::BundleAdjusterBase> adjuster;
@@ -484,10 +451,10 @@ string seam_find_type = "gc_color";
     else if (ba_cost_func == "ray") adjuster = makePtr<detail::BundleAdjusterRay>();
     else if (ba_cost_func == "affine") adjuster = makePtr<detail::BundleAdjusterAffinePartial>();
     else if (ba_cost_func == "no") adjuster = makePtr<NoBundleAdjuster>();
-    else
-    {
+    else {
         cout << "Unknown bundle adjustment cost function: '" << ba_cost_func << "'.\n";
     }
+
     adjuster->setConfThresh(conf_thresh);
     Mat_<uchar> refine_mask = Mat::zeros(3, 3, CV_8U);
     if (ba_refine_mask[0] == 'x') refine_mask(0,0) = 1;
@@ -496,8 +463,7 @@ string seam_find_type = "gc_color";
     if (ba_refine_mask[3] == 'x') refine_mask(1,1) = 1;
     if (ba_refine_mask[4] == 'x') refine_mask(1,2) = 1;
     adjuster->setRefinementMask(refine_mask);
-    if (!(*adjuster)(features, pairwise_matches, cameras))
-    {
+    if (!(*adjuster)(features, pairwise_matches, cameras)) {
         cout << "Camera parameters adjusting failed.\n";
     }
 
@@ -534,15 +500,15 @@ string seam_find_type = "gc_color";
         spdlog::error("Can't create the Cylindrical warper");
     }
 
-    Ptr<RotationWarper> warper = warper_creator->create(static_cast<float>(warped_image_scale * seam_work_aspect));
-    spdlog::info("Warp askpect: {0:f}", static_cast<float>(warped_image_scale * seam_work_aspect));
+    Ptr<RotationWarper> warper = warper_creator->create(static_cast<float>(warped_image_scale));
+    spdlog::info("Warp askpect: {0:f}", static_cast<float>(warped_image_scale));
 
     vector<Point> corners(num_images);
     for (int i = 0; i < num_images; ++i)
     {
         Mat_<float> K;
         cameras[i].K().convertTo(K, CV_32F);
-        float swa = (float)seam_work_aspect;
+        float swa = 1.0;
         K(0,0) *= swa; K(0,2) *= swa;
         K(1,1) *= swa; K(1,2) *= swa;
 
