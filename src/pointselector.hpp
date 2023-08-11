@@ -37,8 +37,5 @@ class PointSelector {
     bool processKeyboardEvent(bool& force_change, const cv::Mat& left, const cv::Mat& right);
 
   private:
-    const int resize_ratio_num_;
-    const int resize_ratio_den_;
-
     std::vector<PointPair> point_pairs_;
 };

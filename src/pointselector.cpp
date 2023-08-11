@@ -5,13 +5,13 @@
 using namespace std;
 using namespace cv;
 
-PointSelector::PointSelector()
-: resize_ratio_num_(3), resize_ratio_den_(8) {
+PointSelector::PointSelector() {
     point_pairs_.push_back(PointPair());
 }
 
 PointSelector::PointSelector(const vector<PointPair>& point_pair)
 : PointSelector() {
+    point_pairs_.clear();
     for(PointPair pp : point_pair) {
         point_pairs_.push_back(pp);
     }
@@ -49,16 +49,13 @@ void PointSelector::mouseHandler(int e, int x, int y, int flags, void *ptr) {
 
 
 vector<PointPair> PointSelector::select_points(const Mat& left, const Mat& right) {
-    Mat rz_left_orig;
-    resize(left, rz_left_orig, Size(left.rows, left.cols*resize_ratio_num_/resize_ratio_den_));
-    Mat rz_right_orig;
-    resize(right, rz_right_orig, Size(right.rows, right.cols*resize_ratio_num_/resize_ratio_den_));
-    imshow("Left", rz_left_orig);
-    imshow("Right", rz_right_orig);
+    namedWindow("Left", WINDOW_NORMAL);
+    namedWindow("Right", WINDOW_NORMAL);
+    imshow("Left", left);
+    imshow("Right", right);
 
-    Mat rz_left(rz_left_orig.clone());
-    Mat rz_right(rz_right_orig.clone());
-    Mat warped(rz_right.rows, rz_right.cols+rz_left.cols, rz_right.type());
+    Mat left_canvas(left.clone());
+    Mat right_canvas(right.clone());
 
     chrono::steady_clock::time_point last_change = chrono::steady_clock::now();
 
@@ -82,7 +79,9 @@ vector<PointPair> PointSelector::select_points(const Mat& left, const Mat& right
         }
 
         if(changed) {
-            spdlog::info("Points changed updating");
+            spdlog::info("Points changed, updating");
+            left_canvas = left.clone();
+            right_canvas = right.clone();
 
             vector<Point2f> pts_left;
             vector<Point2f> pts_right;
@@ -92,28 +91,28 @@ vector<PointPair> PointSelector::select_points(const Mat& left, const Mat& right
                     if(pp.locked) {
                         color = Scalar(255,0,0);
                     }
-                    circle(rz_left, pp.points[0], radius, color);
+                    circle(left_canvas, pp.points[0], radius, color);
                 }
                 if(pp.points[1].x != -1) {
                     Scalar color = Scalar(0,0,255);
                     if(pp.locked) {
                         color = Scalar(255,0,0);
                     }
-                    circle(rz_right, pp.points[1], radius, color);
+                    circle(right_canvas, pp.points[1], radius, color);
                 }
             }
 
-            imshow("Left", rz_left);
-            imshow("Right", rz_right);
+            imshow("Left", left_canvas);
+            imshow("Right", right_canvas);
         }
         changed = false;
-        stop = processKeyboardEvent(changed, rz_left, rz_right);
+        stop = processKeyboardEvent(changed, left, right);
     }
 
     return point_pairs_;
 }
 
-bool PointSelector::processKeyboardEvent(bool& force_change, const Mat&  left, const Mat& right) {
+bool PointSelector::processKeyboardEvent(bool& force_change, const Mat& left, const Mat& right) {
     
     // Can't be 0 we need to check for mouse clicks...
     int key = waitKey(30);
@@ -150,13 +149,15 @@ bool PointSelector::processKeyboardEvent(bool& force_change, const Mat&  left, c
             }
 
             if(pts_left.size() >= 4) {
-                Mat warped(Size(left.cols*2, left.rows));
+                Mat warped(right.rows*2, right.cols*4, right.type());
                 spdlog::info("More than 4 points, hom time");
                 Mat homography = findHomography(pts_right, pts_left, RANSAC, 3, noArray(), 5000);
                 // Mat homography = findHomography(pts_right, pts_left, LMEDS);
                 warpPerspective(right, warped, homography, warped.size());
                 Mat insetImage(warped, cv::Rect(0, 0, left.cols, left.rows));
                 left.copyTo(insetImage);
+
+                namedWindow("Warp", WINDOW_NORMAL);
                 imshow("Warp", warped);
             }
         }
