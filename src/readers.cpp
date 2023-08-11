@@ -15,16 +15,16 @@ using namespace cv;
 using namespace cv::detail;
 using namespace rapidjson;
 
-void readSeamData(const string& cameras_filename, vector<CameraParams>& cameras, vector<UMat>& masks_warped) {
-    rapidjson::Document cameras_doc;
+void readSeamData(const string& cameras_filename, vector<CameraParams>& cameras, vector<UMat>& masks_warped, Rect& rect) {
+    rapidjson::Document stitching_doc;
     ifstream ifs(cameras_filename);
     rapidjson::IStreamWrapper isw(ifs);
-    cameras_doc.ParseStream(isw);
+    stitching_doc.ParseStream(isw);
 
     filesystem::path file_path = filesystem::canonical(cameras_filename);
     uint32_t cam_idx = 0;
     Mat tmp;
-    for(const auto& camera : cameras_doc.GetArray()) {
+    for(const auto& camera : stitching_doc["cameras_params"].GetArray()) {
         stringstream ss;
         ss << "warped_seam_mask_" << cam_idx << ".png";
         string image_name = file_path.replace_filename(ss.str());
@@ -58,6 +58,12 @@ void readSeamData(const string& cameras_filename, vector<CameraParams>& cameras,
         cout << "Initial camera intrinsics #" << cam_idx+1 << ":\nK:\n" << cp.K() << "\nR:\n" << cp.R << endl;
         cam_idx++;
     }
+
+    int x = stitching_doc["crop"]["x"].GetInt();
+    int y = stitching_doc["crop"]["y"].GetInt();
+    int w = stitching_doc["crop"]["w"].GetInt();
+    int h = stitching_doc["crop"]["h"].GetInt();
+    rect = Rect(x, y, w, h);
 }
 
 void readCalibration(const string& calibration_filename, Mat& K, Mat& distortion_coefficients, Size& calibration_image_size) {

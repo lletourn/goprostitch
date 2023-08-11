@@ -33,15 +33,15 @@ int main(int argc, const char ** argv) {
         right_offset = 0;
     }
     
-    uint32_t pano_offset_x = 0;
-    uint32_t pano_offset_y = 0;
-    uint32_t pano_width = 5632/4;
-    uint32_t pano_height = 2160/4;
-
     spdlog::info("Loading Seam data: {}", camera_params_filename);
     vector<detail::CameraParams> cameras_params;
     vector<UMat> masks_warped;
-    readSeamData(camera_params_filename, cameras_params, masks_warped);
+    Rect rect;
+    readSeamData(camera_params_filename, cameras_params, masks_warped, rect);
+    uint32_t pano_offset_x = rect.x;
+    uint32_t pano_offset_y = rect.y;
+    uint32_t pano_width = rect.width;
+    uint32_t pano_height = rect.height;
 
     spdlog::info("Loading file: {}", left_filename);
     spdlog::info("Loading file: {}", right_filename);

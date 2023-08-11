@@ -19,6 +19,6 @@ struct PointPair {
     }
 };
 
-void readSeamData(const std::string& cameras_filename, std::vector<cv::detail::CameraParams>& cameras, std::vector<cv::UMat>& masks_warped);
+void readSeamData(const std::string& cameras_filename, std::vector<cv::detail::CameraParams>& cameras, std::vector<cv::UMat>& masks_warped, cv::Rect& rect);
 void readCalibration(const std::string& calibration_filename, cv::Mat& K, cv::Mat& distortion_coefficients, cv::Size& calibration_image_size);
 std::vector<PointPair> readPointPairs(const std::string& pointpairs_filename);

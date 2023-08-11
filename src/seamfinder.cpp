@@ -60,13 +60,14 @@ std::string type2str(int type) {
 }
 
 
-void compositing(const vector<string>& img_names, const string& result_name, const vector<CameraParams>& cameras, const vector<UMat>& masks_warped);
+Rect compositing(const vector<string>& img_names, const string& result_name, const vector<CameraParams>& cameras, const vector<UMat>& masks_warped);
 
 void finding(const vector<string>& img_names, const vector<PointPair>& point_pairs, vector<CameraParams>& cameras, vector<UMat>& masks_warped);
 
-void writeStitchingData(const vector<CameraParams>& cameras, const vector<UMat>& masks_warped) {
-    rapidjson::Document cameras_doc(kArrayType);
+void writeStitchingData(const string& cameras_params_filename, const vector<CameraParams>& cameras, const vector<UMat>& masks_warped, const Rect& crop_rect) {
+    rapidjson::Document stitching_doc(kObjectType);
 
+    Value cameras_doc(kArrayType);
     for(uint32_t cam_idx=0; cam_idx < cameras.size(); ++cam_idx){
         stringstream ss;
         ss << "warped_seam_mask_" << cam_idx << ".png";
@@ -75,10 +76,10 @@ void writeStitchingData(const vector<CameraParams>& cameras, const vector<UMat>&
 
         const CameraParams& camera_params = cameras[cam_idx];
         Value camera(kObjectType);
-        camera.AddMember("aspect", Value(camera_params.aspect), cameras_doc.GetAllocator());
-        camera.AddMember("focal", Value(camera_params.focal), cameras_doc.GetAllocator());
-        camera.AddMember("ppx", Value(camera_params.ppx), cameras_doc.GetAllocator());
-        camera.AddMember("ppy", Value(camera_params.ppy), cameras_doc.GetAllocator());
+        camera.AddMember("aspect", Value(camera_params.aspect), stitching_doc.GetAllocator());
+        camera.AddMember("focal", Value(camera_params.focal), stitching_doc.GetAllocator());
+        camera.AddMember("ppx", Value(camera_params.ppx), stitching_doc.GetAllocator());
+        camera.AddMember("ppy", Value(camera_params.ppy), stitching_doc.GetAllocator());
 
         if(camera_params.R.depth() == CV_32F)
             spdlog::info("R is 32bit float");
@@ -91,11 +92,11 @@ void writeStitchingData(const vector<CameraParams>& cameras, const vector<UMat>&
         for(uint32_t i = 0; i < camera_params.R.rows; ++i) {
             Value R_row(kArrayType);
             for(uint32_t j = 0; j < camera_params.R.cols; ++j ) {
-                R_row.PushBack(Value(camera_params.R.at<float>(i,j)), cameras_doc.GetAllocator());
+                R_row.PushBack(Value(camera_params.R.at<float>(i,j)), stitching_doc.GetAllocator());
             }
-            R.PushBack(R_row, cameras_doc.GetAllocator());
+            R.PushBack(R_row, stitching_doc.GetAllocator());
         }
-        camera.AddMember("R", R, cameras_doc.GetAllocator());
+        camera.AddMember("R", R, stitching_doc.GetAllocator());
 
         if(camera_params.t.depth() == CV_32F)
             spdlog::error("t is 32bit float");
@@ -105,17 +106,26 @@ void writeStitchingData(const vector<CameraParams>& cameras, const vector<UMat>&
             spdlog::error("t type is unknown");
         Value t(kArrayType);
         for(uint32_t i = 0; i < camera_params.t.rows; ++i) {
-            t.PushBack(Value(camera_params.t.at<double>(i)), cameras_doc.GetAllocator());
+            t.PushBack(Value(camera_params.t.at<double>(i)), stitching_doc.GetAllocator());
         }
-        camera.AddMember("t", t, cameras_doc.GetAllocator());
+        camera.AddMember("t", t, stitching_doc.GetAllocator());
 
-        cameras_doc.PushBack(camera, cameras_doc.GetAllocator());
+        cameras_doc.PushBack(camera, stitching_doc.GetAllocator());
     }
-    ofstream ofs("cameras.json");
+    stitching_doc.AddMember("cameras_params", cameras_doc, stitching_doc.GetAllocator());
+
+    Value pano_crop(kObjectType);
+    pano_crop.AddMember("x", crop_rect.x, stitching_doc.GetAllocator());
+    pano_crop.AddMember("y", crop_rect.y, stitching_doc.GetAllocator());
+    pano_crop.AddMember("w", crop_rect.width, stitching_doc.GetAllocator());
+    pano_crop.AddMember("h", crop_rect.height, stitching_doc.GetAllocator());
+    stitching_doc.AddMember("crop", pano_crop, stitching_doc.GetAllocator());
+
+    ofstream ofs(cameras_params_filename);
     OStreamWrapper osw(ofs);
  
     Writer<OStreamWrapper> writer(osw);
-    cameras_doc.Accept(writer);
+    stitching_doc.Accept(writer);
 }
 
 float compute_warped_image_scale(const vector<CameraParams>& cameras) {
@@ -172,19 +182,132 @@ int main(int argc, char* argv[]) {
     vector<UMat> masks_warped;
 
     if(!parser.get<bool>("findcamparams")) {
-        readSeamData(argv[5], cameras, masks_warped);
+        spdlog::info("From cameras params");
+        Rect rect;
+        readSeamData(parser.get<string>("camparams"), cameras, masks_warped, rect);
     } else {
+        spdlog::info("Generate canera params");
         vector<PointPair> point_pairs;
         if(parser.has("keypoints"))
             point_pairs = readPointPairs(parser.get<string>("keypoints"));
         finding(img_names, point_pairs, cameras, masks_warped);
-        writeStitchingData(cameras, masks_warped);
     }
 
-    compositing(img_names, result_name, cameras, masks_warped);
+    Rect rect = compositing(img_names, result_name, cameras, masks_warped);
+    writeStitchingData(parser.get<string>("camparams"), cameras, masks_warped, rect);
 }
 
-void compositing(const vector<string>& img_names, const string& result_name, const vector<CameraParams>& cameras, const vector<UMat>& masks_warped) {
+Rect cropPano(const Mat& panorama) {
+    int x1 = 2;
+    int y1 = 228;
+    int x2 = 4654;
+    int y2 = 2148;
+
+    namedWindow("Pano", WINDOW_NORMAL);
+
+    cout << "Rect: " << Rect(x1, y1, x2-x1, y2-y1) << endl;
+    Mat tmp = panorama.clone();
+    rectangle(tmp, Rect(x1, y1, x2-x1, y2-y1), Scalar(0,255,0), 5);
+    imshow("Pano", tmp);
+    char ver = 't';
+    char hor = 'l';
+    while(true) {
+        int key = waitKeyEx(30);
+
+        // modifier keys are flags starting at 0x10000
+        bool redraw = false;
+        bool shiftPressed = key & 1 << 16;
+        bool ctrlPressed = key & 1 << 18;
+
+        //key = key & 0xffff;
+        // Arrows == values > 60k...so for keybord, use <128 from the ASCII table
+        if (key != -1 && key != 65535) {
+            cout << "Key: " << key << endl;
+            if (key == 13 || key == 27 || key == 10) { // CR, ESC, or LF
+                break;
+            } else if(key == 't' || key == 'T') {
+                ver = 't';
+                cout << "Ver: " << ver << endl;
+            } else if(key == 'b' || key == 'B') {
+                ver = 'b';
+                cout << "Ver: " << ver << endl;
+            } else if(key == 'l' || key == 'L') {
+                hor = 'l';
+                cout << "Hor: " << hor << endl;
+            } else if(key == 'r' || key == 'R') {
+                hor = 'r';
+                cout << "Hor: " << hor << endl;
+            } else if(key == 65361) { // LEFT
+                cout << " Left" << endl;
+                cout << "Hor: " << hor << endl;
+                if(hor == 'l')
+                    x1--;
+                else
+                    x2--;
+
+                if(x1 < 0)
+                    x1 = 0;
+                if(x2 < 0)
+                    x2 = x1;
+                if(x2 <= x1)
+                    x2 = x1+1;
+            } else if(key == 65362) {
+                cout << "UP" << endl;
+                if(ver == 't')
+                    y1--;
+                else
+                    y2--;
+
+                if(y1 < 0)
+                    y1 = 0;
+                if(y2 < 0)
+                    y2 = y1;
+                if(y2 <= y1)
+                    y2 = y1+1;
+            } else if(key == 65363) { // Right
+                cout << " Right" << endl;
+                cout << "Hor: " << hor << endl;
+                if(hor == 'l')
+                    x1++;
+                else
+                    x2++;
+
+                if(x2 >= panorama.size().width)
+                    x2 = panorama.size().width-1;
+                if(x1 >= panorama.size().width)
+                    x1 = x2;
+                if(x1 >= x2)
+                    x1 = x2-1;
+            } else if(key == 65364) {
+                cout << "Down" << endl;
+                if(ver == 't')
+                    y1++;
+                else
+                    y2++;
+
+                if(y2 >= panorama.size().height)
+                    y2 = panorama.size().height-1;
+                if(y1 >= panorama.size().height)
+                    y1 = y2;
+                if(y1 >= y2)
+                    y1 = y2-1;
+            }
+            redraw = true;
+        }
+        if(redraw) {
+            Rect rect(x1, y1, x2-x1, y2-y1);
+            cout << "Rect: " << rect << endl;
+            Mat tmp = panorama.clone();
+            rectangle(tmp, rect, Scalar(0,255,0), 5);
+            imshow("Pano", tmp);
+        }
+    }
+    destroyAllWindows();
+
+    return Rect(x1, y1, x2-x1, y2-y1);
+}
+
+Rect compositing(const vector<string>& img_names, const string& result_name, const vector<CameraParams>& cameras, const vector<UMat>& masks_warped) {
     int num_images = static_cast<int>(img_names.size());
     vector<Mat> full_imgs(num_images);
     vector<Size> sizes(num_images);
@@ -302,6 +425,8 @@ float blend_strength = 5;
     result.convertTo(m, CV_8UC3);
     cout << "Res type: " << type2str(m.type()) << endl;
     imwrite(result_name, m);
+
+    return cropPano(m);
 }
 
 
