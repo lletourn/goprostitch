@@ -20,7 +20,7 @@ find_package(OpenCV REQUIRED)
 include_directories(${CMAKE_SOURCE_DIR}/src)
 include_directories(${OpenCV_INCLUDE_DIRS})
 
-add_executable(${PROJECT_NAME} ${CMAKE_SOURCE_DIR}/src/main.cpp ${CMAKE_SOURCE_DIR}/src/framestitcher.cpp ${CMAKE_SOURCE_DIR}/src/inputprocessor.cpp ${CMAKE_SOURCE_DIR}/src/outputencoder.cpp ${CMAKE_SOURCE_DIR}/src/seamreader.cpp)
+add_executable(${PROJECT_NAME} ${CMAKE_SOURCE_DIR}/src/main.cpp ${CMAKE_SOURCE_DIR}/src/framestitcher.cpp ${CMAKE_SOURCE_DIR}/src/inputprocessor.cpp ${CMAKE_SOURCE_DIR}/src/outputencoder.cpp ${CMAKE_SOURCE_DIR}/src/readers.cpp)
 set_property(TARGET ${PROJECT_NAME} PROPERTY CXX_STANDARD 17)
 target_link_libraries(${PROJECT_NAME} PRIVATE PkgConfig::LIBAV ${OpenCV_LIBS} spdlog::spdlog)
 
@@ -28,11 +28,11 @@ add_executable(calibrate ${CMAKE_SOURCE_DIR}/src/calibrate.cpp)
 set_property(TARGET calibrate PROPERTY CXX_STANDARD 17)
 target_link_libraries(calibrate PRIVATE ${OpenCV_LIBS} spdlog::spdlog)
 
-add_executable(manualkeypoints ${CMAKE_SOURCE_DIR}/src/manualkeypoints.cpp ${CMAKE_SOURCE_DIR}/src/pointselector.cpp)
+add_executable(manualkeypoints ${CMAKE_SOURCE_DIR}/src/manualkeypoints.cpp ${CMAKE_SOURCE_DIR}/src/pointselector.cpp ${CMAKE_SOURCE_DIR}/src/readers.cpp)
 set_property(TARGET manualkeypoints PROPERTY CXX_STANDARD 17)
 target_link_libraries(manualkeypoints PRIVATE ${OpenCV_LIBS} spdlog::spdlog)
 
-add_executable(viewstitch ${CMAKE_SOURCE_DIR}/src/viewstitch.cpp ${CMAKE_SOURCE_DIR}/src/framestitcher.cpp ${CMAKE_SOURCE_DIR}/src/inputprocessor.cpp ${CMAKE_SOURCE_DIR}/src/seamreader.cpp)
+add_executable(viewstitch ${CMAKE_SOURCE_DIR}/src/viewstitch.cpp ${CMAKE_SOURCE_DIR}/src/framestitcher.cpp ${CMAKE_SOURCE_DIR}/src/inputprocessor.cpp ${CMAKE_SOURCE_DIR}/src/readers.cpp)
 set_property(TARGET viewstitch PROPERTY CXX_STANDARD 17)
 target_link_libraries(viewstitch PRIVATE PkgConfig::LIBAV ${OpenCV_LIBS} spdlog::spdlog)
 
@@ -40,7 +40,7 @@ add_executable(paramextractor ${CMAKE_SOURCE_DIR}/src/paramextractor.cpp ${CMAKE
 set_property(TARGET paramextractor PROPERTY CXX_STANDARD 17)
 target_link_libraries(paramextractor PRIVATE PkgConfig::LIBAV ${OpenCV_LIBS} spdlog::spdlog)
 
-add_executable(seamfinder ${CMAKE_SOURCE_DIR}/src/seamfinder.cpp ${CMAKE_SOURCE_DIR}/src/seamreader.cpp)
+add_executable(seamfinder ${CMAKE_SOURCE_DIR}/src/seamfinder.cpp ${CMAKE_SOURCE_DIR}/src/readers.cpp)
 set_property(TARGET seamfinder PROPERTY CXX_STANDARD 17)
 target_link_libraries(seamfinder PRIVATE PkgConfig::LIBAV ${OpenCV_LIBS} spdlog::spdlog)
 

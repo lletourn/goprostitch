@@ -1,22 +1,7 @@
 #pragma once
 
 #include <opencv2/opencv.hpp>
-
-struct PointPair {
-    bool locked = false;
-    cv::Point points[2];
-
-    PointPair() {
-        points[0] = cv::Point(-1, -1);
-        points[1] = cv::Point(-1, -1);
-    }
-
-    PointPair(bool l, int x1, int y1, int x2, int y2) {
-        locked = l;
-        points[0] = cv::Point(x1, y1);
-        points[1] = cv::Point(x2, y2);
-    }
-};
+#include "readers.hpp"
 
 struct ClickData {
     uint32_t point_idx;
@@ -29,6 +14,8 @@ class PointSelector {
     PointSelector();
     PointSelector(const std::vector<PointPair>& point_pair);
     ~PointSelector();
+
+    cv::Mat homography();
 
     std::vector<PointPair> select_points(const cv::Mat& left, const cv::Mat& right);
   private:

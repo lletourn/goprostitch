@@ -138,21 +138,9 @@ bool PointSelector::processKeyboardEvent(bool& force_change, const Mat& left, co
         }
         else if (key == 'h' || key == 'H') {
             force_change = true;
-            vector<Point2f> pts_left;
-            vector<Point2f> pts_right;
-            for(PointPair& pp : point_pairs_) {
-                if(pp.points[0].x != -1 && pp.points[1].x != -1) {
-                    pts_left.push_back(Point2f(pp.points[0].x, pp.points[0].y));
-                    pts_right.push_back(Point2f(pp.points[1].x, pp.points[1].y));
-                    cout << pp.points[0].x << ',' << pp.points[0].y << ' ' << pp.points[1].x << ',' << pp.points[1].y << endl;
-                }
-            }
-
-            if(pts_left.size() >= 4) {
+            Mat homography = this->homography();
+            if(!homography.empty()) {
                 Mat warped(right.rows*2, right.cols*4, right.type());
-                spdlog::info("More than 4 points, hom time");
-                Mat homography = findHomography(pts_right, pts_left, RANSAC, 3, noArray(), 5000);
-                // Mat homography = findHomography(pts_right, pts_left, LMEDS);
                 warpPerspective(right, warped, homography, warped.size());
                 Mat insetImage(warped, cv::Rect(0, 0, left.cols, left.rows));
                 left.copyTo(insetImage);
@@ -163,4 +151,24 @@ bool PointSelector::processKeyboardEvent(bool& force_change, const Mat& left, co
         }
     }
     return false;
+}
+
+Mat PointSelector::homography() {
+    vector<Point2f> pts_left;
+    vector<Point2f> pts_right;
+    for(PointPair& pp : point_pairs_) {
+        if(pp.points[0].x != -1 && pp.points[1].x != -1) {
+            pts_left.push_back(Point2f(pp.points[0].x, pp.points[0].y));
+            pts_right.push_back(Point2f(pp.points[1].x, pp.points[1].y));
+            cout << pp.points[0].x << ',' << pp.points[0].y << ' ' << pp.points[1].x << ',' << pp.points[1].y << endl;
+        }
+    }
+
+    if(pts_left.size() >= 4) {
+        spdlog::info("More than 4 points, hom time");
+        Mat homography = findHomography(pts_right, pts_left, RANSAC, 3, noArray(), 5000);
+        // Mat homography = findHomography(pts_right, pts_left, LMEDS);
+        return homography;
+    }
+    return Mat();
 }

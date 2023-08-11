@@ -8,7 +8,6 @@
 
 #include "framestitcher.hpp"
 #include "inputprocessor.hpp"
-#include "outputencoder.hpp"
 #include "readers.hpp"
 
 using namespace std;
@@ -21,25 +20,21 @@ int main(int argc, const char ** argv) {
 
     string left_filename(argv[1]);
     string right_filename(argv[2]);
-    string output_filename(argv[3]);
-    int32_t video_offset(atoi(argv[4])); // Positive offsets shifts right and takes left audio. Negative is the opposite
-    string camera_params_filename(argv[5]);
-    uint16_t nb_workers(atoi(argv[6]));
+    int32_t video_offset(atoi(argv[3])); // Positive offsets shifts right and takes left audio. Negative is the opposite
+    string camera_params_filename(argv[4]);
 
     uint32_t left_offset;
     uint32_t right_offset;
-    bool use_left_audio = true;
     if(video_offset >= 0) {
         left_offset = 0;
         right_offset = video_offset;
     } else {
         left_offset = -1*video_offset;
         right_offset = 0;
-        use_left_audio = false;
     }
     
-    uint32_t pano_offset_x = 551;
-    uint32_t pano_offset_y = 175;
+    uint32_t pano_offset_x = 0;
+    uint32_t pano_offset_y = 0;
     uint32_t pano_width = 5632/4;
     uint32_t pano_height = 2160/4;
 
@@ -64,12 +59,7 @@ int main(int argc, const char ** argv) {
         duration = right_processor.duration();
     ThreadSafeQueue<LeftRightPacket> stitcher_queue(input_queue_size*3);
 
-    spdlog::info("Writting file: {}", output_filename);
-    OutputEncoder output_encoder(output_filename, left_processor.getOutAudioQueue(), right_processor.getOutAudioQueue(), pano_width, pano_height, use_left_audio, left_processor.video_time_base(), left_processor.audio_time_base(), input_queue_size);
-    output_encoder.initialize(left_processor.audio_codec_parameters(), right_processor.audio_codec_parameters(), duration);
-
     // Start IO Threads
-    output_encoder.start();
     left_processor.start();
     right_processor.start();
 
@@ -79,7 +69,18 @@ int main(int argc, const char ** argv) {
     spdlog::info("Find Ref frame for white balance");
     vector<vector<uint32_t>> reference_bgr_value_idxs;
     vector<vector<double>> reference_bgr_cumsum;
+    chrono::milliseconds audio_wait(chrono::milliseconds(1));
     while(true) {
+        while(true) {
+            unique_ptr<AVPacket, PacketDeleter> audio_packet(left_processor.getOutAudioQueue().pop(audio_wait));
+            if(!audio_packet)
+                break;
+        }
+        while(true) {
+            unique_ptr<AVPacket, PacketDeleter> audio_packet(right_processor.getOutAudioQueue().pop(audio_wait));
+            if(!audio_packet)
+                break;
+        }
         unique_ptr<VideoPacket> left_input_packet(left_processor.getOutVideoQueue().pop(chrono::seconds(1)));
         if(left_input_packet) {
             FrameStitcher::BuildReferenceHistogram(left_input_packet->data.get(), left_input_packet->width, left_input_packet->height, reference_bgr_value_idxs, reference_bgr_cumsum);
@@ -89,14 +90,13 @@ int main(int argc, const char ** argv) {
             break;
         }
     }
+    spdlog::info("Found Ref frame for white balance");
 
-
+    ThreadSafeQueue<PanoramicPacket> panoramic_packet_queue(input_queue_size);
     vector<unique_ptr<FrameStitcher>> frame_stitchers;
-    for(uint16_t i=0; i < nb_workers; ++i) {
-        unique_ptr<FrameStitcher> fs(new FrameStitcher(pano_offset_x, pano_offset_y, pano_width, pano_height, stitcher_queue, output_encoder.getInPanoramicQueue(), cameras_params, masks_warped, reference_bgr_value_idxs, reference_bgr_cumsum));
-        fs->start();
-        frame_stitchers.push_back(move(fs));
-    }
+    unique_ptr<FrameStitcher> fs(new FrameStitcher(pano_offset_x, pano_offset_y, pano_width, pano_height, stitcher_queue, panoramic_packet_queue, cameras_params, masks_warped, reference_bgr_value_idxs, reference_bgr_cumsum));
+    fs->start();
+    frame_stitchers.push_back(move(fs));
 
     int32_t last_video_idx = numeric_limits<int32_t>::max();
     double last_video_frame_time = 0;
@@ -108,7 +108,21 @@ int main(int argc, const char ** argv) {
     spdlog::info("Processing all frames");
     chrono::steady_clock::time_point start = chrono::steady_clock::now();
     double prev_delta = 0;
+    chrono::milliseconds video_wait(chrono::milliseconds(10));
+    Mat img, img_small;
+    spdlog::info("Process loop...");
     while(true) {
+        while(true) {
+            unique_ptr<AVPacket, PacketDeleter> audio_packet(left_processor.getOutAudioQueue().pop(audio_wait));
+            if(!audio_packet)
+                break;
+        }
+        while(true) {
+            unique_ptr<AVPacket, PacketDeleter> audio_packet(right_processor.getOutAudioQueue().pop(audio_wait));
+            if(!audio_packet)
+                break;
+        }
+
         bool read_left = false;
         bool read_right = false;
 
@@ -154,6 +168,7 @@ int main(int argc, const char ** argv) {
             }
         }
 
+        spdlog::info("Reading video packets");
         while(left_video_packets.find(idx_to_process) != left_video_packets.end() && right_video_packets.find(idx_to_process) != right_video_packets.end()) {
             unique_ptr<LeftRightPacket> lr_packet(new LeftRightPacket());
             
@@ -173,18 +188,16 @@ int main(int argc, const char ** argv) {
             right_video_packets.erase(idx_to_process);
             ++idx_to_process;
 
-            double delta = chrono::duration_cast<chrono::milliseconds>(chrono::steady_clock::now() - start).count();
-            // double fps = ((double)idx_to_process/delta) * 1000.0;
-
-            if((delta - prev_delta) > 60000.0) {
-                prev_delta = delta;
-                spdlog::debug("L: {} R: {} S: {} oP:{}", 
-                                left_processor.getOutVideoQueue().estimated_size(),
-                                right_processor.getOutVideoQueue().estimated_size(),
-                                stitcher_queue.estimated_size(),
-                                output_encoder.getInPanoramicQueue().estimated_size());
+            unique_ptr<PanoramicPacket> new_panoramic_packet(panoramic_packet_queue.pop(video_wait));
+            if(new_panoramic_packet) {
+                spdlog::info("Displaying pano");
+                Mat pano(new_panoramic_packet->height * 3/2, new_panoramic_packet->width, CV_8UC1, new_panoramic_packet->data.get());
+                cvtColor(pano, img, COLOR_YUV2BGR_I420);
+                resize(img, img_small, Size(1920, 1080), 0, 0, INTER_CUBIC);
+                
+                imshow("Pano", img_small);
+                waitKey(1);
             }
-            // spdlog::debug("Main FPS: {}", fps);
         }
 
         if(!read_left && !read_right && left_processor.is_done() && right_processor.is_done()) {
@@ -194,6 +207,5 @@ int main(int argc, const char ** argv) {
     left_processor.stop();
     right_processor.stop();
 
-    output_encoder.stop();
     spdlog::info("Done");
 }

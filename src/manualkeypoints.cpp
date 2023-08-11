@@ -8,31 +8,11 @@
 #include <rapidjson/writer.h>
 
 #include "pointselector.hpp"
+#include "readers.hpp"
 
 using namespace cv;
 using namespace std;
 using namespace rapidjson;
-
-vector<PointPair> readPointPairs(const string& pointpairs_filename) {
-    rapidjson::Document pairs_doc;
-    ifstream ifs(pointpairs_filename);
-    rapidjson::IStreamWrapper isw(ifs);
-    pairs_doc.ParseStream(isw);
-
-    vector<PointPair> pps;
-    for(const auto& pair : pairs_doc.GetArray()) {
-        PointPair pp;
-        pp.locked = true;
-        pp.points[0].x = pair["left"]["x"].GetInt();
-        pp.points[0].y = pair["left"]["y"].GetInt();
-        pp.points[1].x = pair["right"]["x"].GetInt();
-        pp.points[1].y = pair["right"]["y"].GetInt();
-
-        pps.push_back(pp);
-    }
-
-    return pps;
-}
 
 void writePointPairs(const string& pointpairs_filename, const vector<PointPair>& pps) {
     Document pairs_doc(kArrayType);

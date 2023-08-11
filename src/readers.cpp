@@ -1,4 +1,4 @@
-#include "seamreader.hpp"
+#include "readers.hpp"
 
 #include <filesystem>
 #include <fstream>
@@ -59,3 +59,49 @@ void readSeamData(const string& cameras_filename, vector<CameraParams>& cameras,
         cam_idx++;
     }
 }
+
+void readCalibration(const string& calibration_filename, Mat& K, Mat& distortion_coefficients, Size& calibration_image_size) {
+    rapidjson::Document camera_params_doc;
+    ifstream ifs(calibration_filename);
+    rapidjson::IStreamWrapper isw(ifs);
+    camera_params_doc.ParseStream(isw);
+
+    K = Mat::zeros(3, 3, CV_64F);
+    distortion_coefficients = Mat::zeros(3, 3, CV_64F);
+
+    for (SizeType i = 0; i < camera_params_doc["K"].Size(); ++i) {
+        for (SizeType j=0; j < camera_params_doc["K"][i].Size(); ++j) {
+            K.at<double>(i,j) = camera_params_doc["K"][i][j].GetDouble();
+        }
+    }
+
+    distortion_coefficients = Mat::zeros(1, camera_params_doc["D"].Size(), CV_64F);
+    for (SizeType i = 0; i < camera_params_doc["D"].Size(); ++i) {
+        distortion_coefficients.at<double>(i) = camera_params_doc["D"][i].GetDouble();
+    }
+
+    calibration_image_size.height = camera_params_doc["height"].GetInt();
+    calibration_image_size.width = camera_params_doc["width"].GetInt();
+}
+
+vector<PointPair> readPointPairs(const string& pointpairs_filename) {
+    rapidjson::Document pairs_doc;
+    ifstream ifs(pointpairs_filename);
+    rapidjson::IStreamWrapper isw(ifs);
+    pairs_doc.ParseStream(isw);
+
+    vector<PointPair> pps;
+    for(const auto& pair : pairs_doc.GetArray()) {
+        PointPair pp;
+        pp.locked = true;
+        pp.points[0].x = pair["left"]["x"].GetInt();
+        pp.points[0].y = pair["left"]["y"].GetInt();
+        pp.points[1].x = pair["right"]["x"].GetInt();
+        pp.points[1].y = pair["right"]["y"].GetInt();
+
+        pps.push_back(pp);
+    }
+
+    return pps;
+}
+

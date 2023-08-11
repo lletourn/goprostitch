@@ -28,7 +28,8 @@
 #include "opencv2/xfeatures2d.hpp"
 #include "opencv2/xfeatures2d/nonfree.hpp"
 #endif
-#include "seamreader.hpp"
+
+#include "readers.hpp"
 
 using namespace std;
 using namespace cv;
@@ -56,30 +57,6 @@ std::string type2str(int type) {
   r += (chans+'0');
 
   return r;
-}
-
-void readCalibration(const string& calibration_filename, Mat& K, Mat& distortion_coefficients, Size& calibration_image_size) {
-    rapidjson::Document camera_params_doc;
-    ifstream ifs(calibration_filename);
-    rapidjson::IStreamWrapper isw(ifs);
-    camera_params_doc.ParseStream(isw);
-
-    K = Mat::zeros(3, 3, CV_64F);
-    distortion_coefficients = Mat::zeros(3, 3, CV_64F);
-
-    for (SizeType i = 0; i < camera_params_doc["K"].Size(); ++i) {
-        for (SizeType j=0; j < camera_params_doc["K"][i].Size(); ++j) {
-            K.at<double>(i,j) = camera_params_doc["K"][i][j].GetDouble();
-        }
-    }
-
-    distortion_coefficients = Mat::zeros(1, camera_params_doc["D"].Size(), CV_64F);
-    for (SizeType i = 0; i < camera_params_doc["D"].Size(); ++i) {
-        distortion_coefficients.at<double>(i) = camera_params_doc["D"][i].GetDouble();
-    }
-
-    calibration_image_size.height = camera_params_doc["height"].GetInt();
-    calibration_image_size.width = camera_params_doc["width"].GetInt();
 }
 
 
@@ -166,11 +143,24 @@ int main(int argc, char* argv[]) {
     cv::setBreakOnError(true);
     cv::ocl::setUseOpenCL(false);
 
+    const String keys =
+        "{help h usage ? | | print this message }"
+        "{left |<none>| Left image }"
+        "{right |<none>| Right image }"
+        "{calibration |<none>| Intrinsic camera parameters json filename}"
+        "{output |<none>| Output panorama }"
+        "{camparams | | Camera parameter filename }"
+        "{findcamparams | true | Generate camera parameters or read them from the file }"
+    ;
+
+    CommandLineParser parser(argc, argv, keys);
+    parser.about("Seam finder");
+
     vector<string> img_names;
-    img_names.push_back(argv[1]);
-    img_names.push_back(argv[2]);
-    string calibration_filename = argv[3];
-    string result_name = argv[4];
+    img_names.push_back(parser.get<string>("left"));
+    img_names.push_back(parser.get<string>("right"));
+    string calibration_filename = parser.get<string>("calibration");
+    string result_name = parser.get<string>("output");;
 
     int num_images = static_cast<int>(img_names.size());
 
@@ -182,7 +172,7 @@ int main(int argc, char* argv[]) {
     vector<CameraParams> cameras;
     vector<UMat> masks_warped;
 
-    if(argc > 5) {
+    if(!parser.get<bool>("findcamparams")) {
         readSeamData(argv[5], cameras, masks_warped);
     } else {
         finding(img_names, K, distortion_coefficients, calibration_image_size, cameras, masks_warped);
