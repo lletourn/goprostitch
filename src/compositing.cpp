@@ -23,43 +23,66 @@ float compute_warped_image_scale(const vector<CameraParams>& cameras) {
     return warped_image_scale;
 }
 
-void compositing(const vector<Mat>& images, const vector<CameraParams>& cameras, const vector<UMat>& masks_warped, Mat& output_image) {
-    int num_images = static_cast<int>(images.size());
-    vector<Mat> full_imgs(num_images);
-    vector<Size> sizes(num_images);
-    full_imgs[0] = images[0].clone();
-    full_imgs[1] = images[1].clone();
-    
-    Mat img;
+ImageCompositing::ImageCompositing(const std::vector<cv::detail::CameraParams>& cameras, const std::vector<cv::UMat>& masks_warped, const vector<Size> images_size)
+: cameras_parameters_(cameras), blending_masks_(masks_warped.size()), corners_(cameras.size()), sizes_(cameras.size()) {
+
     float warped_image_scale = compute_warped_image_scale(cameras);
     Ptr<WarperCreator> warper_creator = makePtr<cv::CylindricalWarper>();
     if (!warper_creator) {
         throw runtime_error("Can't create the Cylindrical warper");
     }
 
-    Ptr<RotationWarper> warper = warper_creator->create(warped_image_scale);
+    warper_ = warper_creator->create(warped_image_scale);
+
+    uint32_t num_images = cameras.size();
+    for (int i = 0; i < num_images; ++i) {
+        // Update corner and size
+        Size sz = images_size[i];
+
+        Mat K;
+        cameras[i].K().convertTo(K, CV_32F);
+        Rect roi = warper_->warpRoi(sz, K, cameras[i].R);
+        corners_[i] = roi.tl();
+        sizes_[i] = roi.size();
+    }
+
+    Mat mask;
+    Mat mask_warped;
+    Mat dilated_mask;
+    Mat seam_mask;
+    for (int img_idx = 0; img_idx < num_images; ++img_idx) {
+        Mat K;
+        cameras[img_idx].K().convertTo(K, CV_32F);
+        // Warp the current image mask
+        mask.create(images_size[img_idx], CV_8U);
+        mask.setTo(Scalar::all(255));
+        warper_->warp(mask, K, cameras[img_idx].R, INTER_NEAREST, BORDER_CONSTANT, mask_warped);
+        dilate(masks_warped[img_idx], dilated_mask, Mat());
+        resize(dilated_mask, seam_mask, mask_warped.size(), 0, 0, INTER_LINEAR_EXACT);
+        blending_masks_[img_idx] = seam_mask & mask_warped;
+    }
+}
+
+ImageCompositing::~ImageCompositing() {
+}
+  
+void ImageCompositing::compose(const vector<Mat>& images, Mat& output_image) {
+    int num_images = static_cast<int>(images.size());
+    vector<Mat> full_imgs(num_images);
+    full_imgs[0] = images[0].clone();
+    full_imgs[1] = images[1].clone();
+    
+    Mat img;
 int blend_type = Blender::NO;
 float blend_strength = 5;
 
     Mat img_warped, img_warped_s;
-    Mat dilated_mask, seam_mask, mask, mask_warped;
+    Mat dilated_mask, seam_mask, mask_warped;
     Ptr<Blender> blender;
     //double compose_seam_aspect = 1;
     double compose_work_aspect = 1;
     bool is_compose_scale_set = false;
     double compose_scale = 1;
-
-    vector<Point> corners(num_images);
-    for (int i = 0; i < num_images; ++i) {
-        // Update corner and size
-        Size sz = full_imgs[i].size();
-
-        Mat K;
-        cameras[i].K().convertTo(K, CV_32F);
-        Rect roi = warper->warpRoi(sz, K, cameras[i].R);
-        corners[i] = roi.tl();
-        sizes[i] = roi.size();
-    }
 
     for (int img_idx = 0; img_idx < num_images; ++img_idx) {
         // Read image and resize it if necessary
@@ -67,28 +90,18 @@ float blend_strength = 5;
         Size img_size = img.size();
 
         Mat K;
-        cameras[img_idx].K().convertTo(K, CV_32F);
+        cameras_parameters_[img_idx].K().convertTo(K, CV_32F);
 
         // Warp the current image
-        warper->warp(img, K, cameras[img_idx].R, INTER_LINEAR, BORDER_REFLECT, img_warped);
-
-        // Warp the current image mask
-        mask.create(img_size, CV_8U);
-        mask.setTo(Scalar::all(255));
-        warper->warp(mask, K, cameras[img_idx].R, INTER_NEAREST, BORDER_CONSTANT, mask_warped);
+        warper_->warp(img, K, cameras_parameters_[img_idx].R, INTER_LINEAR, BORDER_REFLECT, img_warped);
 
         img_warped.convertTo(img_warped_s, CV_16S);
         img_warped.release();
         img.release();
-        mask.release();
-
-        dilate(masks_warped[img_idx], dilated_mask, Mat());
-        resize(dilated_mask, seam_mask, mask_warped.size(), 0, 0, INTER_LINEAR_EXACT);
-        mask_warped = seam_mask & mask_warped;
 
         if (!blender) {
             blender = Blender::createDefault(blend_type, false);
-            Rect roi = resultRoi(corners, sizes);
+            Rect roi = resultRoi(corners_, sizes_);
             Size dst_sz = roi.size();
             float blend_width = sqrt(static_cast<float>(dst_sz.area())) * blend_strength / 100.f;
             if (blend_width < 1.f)
@@ -103,13 +116,13 @@ float blend_strength = 5;
                 FeatherBlender* fb = dynamic_cast<FeatherBlender*>(blender.get());
                 fb->setSharpness(1.f/blend_width);
             }
-            blender->prepare(corners, sizes);
+            blender->prepare(corners_, sizes_);
         }
 
         //imshow("0 iwar", img_warped_s);
         //imshow("0 mwar", mask_warped);
         //waitKey(0);
-        blender->feed(img_warped_s, mask_warped, corners[img_idx]);
+        blender->feed(img_warped_s, blending_masks_[img_idx], corners_[img_idx]);
     }
 
     Mat result, result_mask;

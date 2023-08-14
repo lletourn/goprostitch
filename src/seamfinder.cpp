@@ -155,6 +155,7 @@ int main(int argc, char* argv[]) {
     }
 
     vector<Mat> images = {imread(parser.get<string>("left")), imread(parser.get<string>("right"))};
+    vector<Size> images_size = {images[0].size(), images[1].size()};
     string result_name = parser.get<string>("output");;
 
     vector<CameraParams> cameras;
@@ -174,7 +175,8 @@ int main(int argc, char* argv[]) {
     }
 
     Mat output_image;
-    compositing(images, cameras, masks_warped, output_image);
+    ImageCompositing compositor(cameras, masks_warped, images_size);
+    compositor.compose(images, output_image);
 
     imwrite(result_name, output_image);
 
