@@ -127,6 +127,9 @@ FrameStitcher::FrameStitcher(
     ThreadSafeQueue<LeftRightPacket>& stitcher_queue,
     ThreadSafeQueue<PanoramicPacket>& output_queue,
     vector<detail::CameraParams> camera_params,
+    const Mat camera_intrinsic_K,
+    const Mat camera_intrinsic_distortion_coefficients,
+    const Size calibration_image_size,
     const vector<UMat>& image_masks,
     const vector<vector<uint32_t>>& reference_bgr_value_idxs,
     const vector<vector<double>>& reference_bgr_cumsum)
@@ -138,6 +141,9 @@ FrameStitcher::FrameStitcher(
   stitcher_queue_(stitcher_queue),
   output_queue_(output_queue),
   camera_params_(camera_params),
+  camera_intrinsic_K_(camera_intrinsic_K),
+  camera_intrinsic_distortion_coefficients_(camera_intrinsic_distortion_coefficients),
+  calibration_image_size_(calibration_image_size),
   image_masks_(image_masks),
   reference_bgr_value_idxs_(reference_bgr_value_idxs),
   reference_bgr_cumsum_(reference_bgr_cumsum),
@@ -278,6 +284,10 @@ void FrameStitcher::run() {
     Mat panoramic_image;
     Mat panoramic_image_yuv;
     Mat rs;
+
+    Mat view, rview, map1, map2;
+    Mat optimized_camera_matrix = getOptimalNewCameraMatrix(camera_intrinsic_K_, camera_intrinsic_distortion_coefficients_, calibration_image_size_, 0);
+    initUndistortRectifyMap(camera_intrinsic_K_, camera_intrinsic_distortion_coefficients_, Mat(), optimized_camera_matrix, calibration_image_size_,  CV_16SC2, map1, map2);
     while(running_) {
         unique_ptr<LeftRightPacket> left_right_packet(stitcher_queue_.pop(chrono::seconds(1)));
         if(left_right_packet) {
@@ -286,6 +296,8 @@ void FrameStitcher::run() {
 
             cvtColor(left, images[0], COLOR_YUV2BGR_I420);
             cvtColor(right, images[1], COLOR_YUV2BGR_I420);
+            remap(images[0], images[0], map1, map2, INTER_LINEAR);
+            remap(images[1], images[1], map1, map2, INTER_LINEAR);
 
             if(match_histogram_)
                 MatchHistograms(images[1], reference_bgr_cumsum_, reference_bgr_value_idxs_);

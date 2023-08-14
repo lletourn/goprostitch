@@ -18,10 +18,33 @@ int main(int argc, const char ** argv) {
     spdlog::set_pattern("%Y%m%dT%H:%M:%S.%e [%^%l%$] -%n- -%t- : %v");
     spdlog::set_level(spdlog::level::debug);
 
-    string left_filename(argv[1]);
-    string right_filename(argv[2]);
-    int32_t video_offset(atoi(argv[3])); // Positive offsets shifts right and takes left audio. Negative is the opposite
-    string camera_params_filename(argv[4]);
+    const String keys =
+        "{help h usage ? | | print this message }"
+        "{left |<none>| Left video }"
+        "{right |<none>| Right video }"
+        "{offset | 0 | Video frame offset. Positive offsets shifts right and takes left audio. Negative is the opposite }"
+        "{camparams |<none>| Camera parameter filename }"
+        "{camintrinsics |<none>| Camera instrinsics filename }"
+        "{threads | 1 | Nb of stitching threads. There are 3 threads by default for video reading(2) and video encoding(~1). }"
+        "{fixexposure | false | Fix whitebalance between cameras }"
+    ;
+    CommandLineParser parser(argc, argv, keys);
+    parser.about("Seam finder");
+
+    if(parser.has("help")) {
+        parser.printMessage();
+        return 0;
+    }
+    string left_filename(parser.get<string>("left"));
+    string right_filename(parser.get<string>("right"));
+    int32_t video_offset(parser.get<int32_t>("offset"));
+    string camera_params_filename(parser.get<string>("camparams"));
+    string camera_intrinsics_filename(parser.get<string>("camintrinsics"));
+
+    Mat camera_intrinsics_K;
+    Mat camera_intrinsics_distortion_coefficients;
+    Size camera_intrinsics_image_size_used;
+    readCalibration(camera_intrinsics_filename, camera_intrinsics_K, camera_intrinsics_distortion_coefficients, camera_intrinsics_image_size_used);
 
     uint32_t left_offset;
     uint32_t right_offset;
@@ -94,7 +117,7 @@ int main(int argc, const char ** argv) {
 
     ThreadSafeQueue<PanoramicPacket> panoramic_packet_queue(input_queue_size);
     vector<unique_ptr<FrameStitcher>> frame_stitchers;
-    unique_ptr<FrameStitcher> fs(new FrameStitcher(pano_offset_x, pano_offset_y, pano_width, pano_height, stitcher_queue, panoramic_packet_queue, cameras_params, masks_warped, reference_bgr_value_idxs, reference_bgr_cumsum));
+    unique_ptr<FrameStitcher> fs(new FrameStitcher(pano_offset_x, pano_offset_y, pano_width, pano_height, stitcher_queue, panoramic_packet_queue, cameras_params, camera_intrinsics_K, camera_intrinsics_distortion_coefficients, camera_intrinsics_image_size_used, masks_warped, reference_bgr_value_idxs, reference_bgr_cumsum));
     fs->start();
     frame_stitchers.push_back(move(fs));
 

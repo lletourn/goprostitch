@@ -29,6 +29,7 @@
 #include "opencv2/xfeatures2d/nonfree.hpp"
 #endif
 
+#include "compositing.hpp"
 #include "readers.hpp"
 
 using namespace std;
@@ -60,9 +61,9 @@ std::string type2str(int type) {
 }
 
 
-Rect compositing(const vector<string>& img_names, const string& result_name, const vector<CameraParams>& cameras, const vector<UMat>& masks_warped);
+void finding(const vector<Mat>& src_images, const vector<PointPair>& point_pairs, vector<CameraParams>& cameras, vector<UMat>& masks_warped);
 
-void finding(const vector<string>& img_names, const vector<PointPair>& point_pairs, vector<CameraParams>& cameras, vector<UMat>& masks_warped);
+Rect cropPano(const Mat& panorama);
 
 void writeStitchingData(const string& cameras_params_filename, const vector<CameraParams>& cameras, const vector<UMat>& masks_warped, const Rect& crop_rect) {
     rapidjson::Document stitching_doc(kObjectType);
@@ -128,24 +129,6 @@ void writeStitchingData(const string& cameras_params_filename, const vector<Came
     stitching_doc.Accept(writer);
 }
 
-float compute_warped_image_scale(const vector<CameraParams>& cameras) {
-    // Find median focal length
-    vector<double> focals;
-    for (size_t i = 0; i < cameras.size(); ++i) {
-        focals.push_back(cameras[i].focal);
-    }
-
-    sort(focals.begin(), focals.end());
-    float warped_image_scale;
-    if (focals.size() % 2 == 1)
-        warped_image_scale = static_cast<float>(focals[focals.size() / 2]);
-    else
-        warped_image_scale = static_cast<float>(focals[focals.size() / 2 - 1] + focals[focals.size() / 2]) * 0.5f;
-
-    return warped_image_scale;
-}
-
-
 int main(int argc, char* argv[]) {
     spdlog::set_pattern("%Y%m%dT%H:%M:%S.%e [%^%l%$] -%n- -%t- : %v");
     spdlog::set_level(spdlog::level::debug);
@@ -160,7 +143,7 @@ int main(int argc, char* argv[]) {
         "{keypoints | | Left-Right keypoints json filename}"
         "{output |<none>| Output panorama }"
         "{camparams | | Camera parameter filename }"
-        "{findcamparams | true | Generate camera parameters or read them from the file }"
+        "{findcamparams | false | Generate camera parameters or read them from the file }"
     ;
 
     CommandLineParser parser(argc, argv, keys);
@@ -171,12 +154,8 @@ int main(int argc, char* argv[]) {
         return 0;
     }
 
-    vector<string> img_names;
-    img_names.push_back(parser.get<string>("left"));
-    img_names.push_back(parser.get<string>("right"));
+    vector<Mat> images = {imread(parser.get<string>("left")), imread(parser.get<string>("right"))};
     string result_name = parser.get<string>("output");;
-
-    int num_images = static_cast<int>(img_names.size());
 
     vector<CameraParams> cameras;
     vector<UMat> masks_warped;
@@ -186,21 +165,27 @@ int main(int argc, char* argv[]) {
         Rect rect;
         readSeamData(parser.get<string>("camparams"), cameras, masks_warped, rect);
     } else {
-        spdlog::info("Generate canera params");
+        spdlog::info("Generate camera params");
+
         vector<PointPair> point_pairs;
         if(parser.has("keypoints"))
             point_pairs = readPointPairs(parser.get<string>("keypoints"));
-        finding(img_names, point_pairs, cameras, masks_warped);
+        finding(images, point_pairs, cameras, masks_warped);
     }
 
-    Rect rect = compositing(img_names, result_name, cameras, masks_warped);
+    Mat output_image;
+    compositing(images, cameras, masks_warped, output_image);
+
+    imwrite(result_name, output_image);
+
+    Rect rect = cropPano(output_image);
     writeStitchingData(parser.get<string>("camparams"), cameras, masks_warped, rect);
 }
 
 Rect cropPano(const Mat& panorama) {
-    int x1 = 2;
+    int x1 = 308;
     int y1 = 228;
-    int x2 = 4654;
+    int x2 = 5038;
     int y2 = 2148;
 
     namedWindow("Pano", WINDOW_NORMAL);
@@ -307,132 +292,9 @@ Rect cropPano(const Mat& panorama) {
     return Rect(x1, y1, x2-x1, y2-y1);
 }
 
-Rect compositing(const vector<string>& img_names, const string& result_name, const vector<CameraParams>& cameras, const vector<UMat>& masks_warped) {
-    int num_images = static_cast<int>(img_names.size());
-    vector<Mat> full_imgs(num_images);
-    vector<Size> sizes(num_images);
-    full_imgs[0] = imread(samples::findFile(img_names[0]));
-    full_imgs[1] = imread(samples::findFile(img_names[1]));
-    
-    Mat img;
-    float warped_image_scale = compute_warped_image_scale(cameras);
-    Ptr<WarperCreator> warper_creator = makePtr<cv::CylindricalWarper>();
-    if (!warper_creator) {
-        spdlog::error("Can't create the Cylindrical warper");
-    }
-
-    Ptr<RotationWarper> warper = warper_creator->create(warped_image_scale);
-    spdlog::info("Compositing...");
-int blend_type = Blender::NO;
-float blend_strength = 5;
-
-    Mat img_warped, img_warped_s;
-    Mat dilated_mask, seam_mask, mask, mask_warped;
-    Ptr<Blender> blender;
-    //double compose_seam_aspect = 1;
-    double compose_work_aspect = 1;
-    bool is_compose_scale_set = false;
-    double compose_scale = 1;
-
-    spdlog::info("Update corners");
-    vector<Point> corners(num_images);
-    for (int i = 0; i < num_images; ++i) {
-        // Update corner and size
-        Size sz = full_imgs[i].size();
-
-        Mat K;
-        cameras[i].K().convertTo(K, CV_32F);
-        Rect roi = warper->warpRoi(sz, K, cameras[i].R);
-        corners[i] = roi.tl();
-        sizes[i] = roi.size();
-        cout << "Size: " << sizes[i] << endl;
-    }
-    for(auto& corner : corners)
-        cout << "Corner: " << corner << endl;
-
-    for (int img_idx = 0; img_idx < num_images; ++img_idx) {
-        stringstream ss;
-        ss << "Compositing image #" <<img_idx+1;
-        spdlog::info(ss.str()); ss.str(string()); ss.clear();
-
-        // Read image and resize it if necessary
-        ss << "Reading: [" << img_idx << "] " << img_names[img_idx];
-        spdlog::info(ss.str()); ss.str(string()); ss.clear();
-        img = full_imgs[img_idx];
-        Size img_size = img.size();
-
-        Mat K;
-        cameras[img_idx].K().convertTo(K, CV_32F);
-
-        spdlog::info("Warp image");
-        // Warp the current image
-        warper->warp(img, K, cameras[img_idx].R, INTER_LINEAR, BORDER_REFLECT, img_warped);
-
-        // Warp the current image mask
-        spdlog::info("Create mask");
-        mask.create(img_size, CV_8U);
-        mask.setTo(Scalar::all(255));
-        warper->warp(mask, K, cameras[img_idx].R, INTER_NEAREST, BORDER_CONSTANT, mask_warped);
-
-        img_warped.convertTo(img_warped_s, CV_16S);
-        img_warped.release();
-        img.release();
-        mask.release();
-
-        spdlog::info("Create seam mask");
-        dilate(masks_warped[img_idx], dilated_mask, Mat());
-        resize(dilated_mask, seam_mask, mask_warped.size(), 0, 0, INTER_LINEAR_EXACT);
-        mask_warped = seam_mask & mask_warped;
-
-        if (!blender) {
-            blender = Blender::createDefault(blend_type, false);
-            Rect roi = resultRoi(corners, sizes);
-            Size dst_sz = roi.size();
-            cout << "ROI: " << roi << " Sz: " << dst_sz << endl;
-            float blend_width = sqrt(static_cast<float>(dst_sz.area())) * blend_strength / 100.f;
-            if (blend_width < 1.f)
-                blender = Blender::createDefault(Blender::NO, false);
-            else if (blend_type == Blender::MULTI_BAND)
-            {
-                MultiBandBlender* mb = dynamic_cast<MultiBandBlender*>(blender.get());
-                mb->setNumBands(static_cast<int>(ceil(log(blend_width)/log(2.)) - 1.));
-                stringstream ssb("Multi-band blender, number of bands: ");
-                ssb << mb->numBands();
-                spdlog::info(ssb.str());
-            }
-            else if (blend_type == Blender::FEATHER)
-            {
-                FeatherBlender* fb = dynamic_cast<FeatherBlender*>(blender.get());
-                fb->setSharpness(1.f/blend_width);
-                stringstream ssb("Feather blender, sharpness: ");
-                ssb << fb->sharpness();
-                spdlog::info(ssb.str());
-            }
-            blender->prepare(corners, sizes);
-        }
-
-        //imshow("0 iwar", img_warped_s);
-        //imshow("0 mwar", mask_warped);
-        //waitKey(0);
-        cout << "Corner Idx: " << img_idx << " [" << corners[img_idx].x << "," << corners[img_idx].y << endl;
-        blender->feed(img_warped_s, mask_warped, corners[img_idx]);
-    }
-
-    Mat result, result_mask;
-    blender->blend(result, result_mask);
-
-    Mat m;
-    result.convertTo(m, CV_8UC3);
-    cout << "Res type: " << type2str(m.type()) << endl;
-    imwrite(result_name, m);
-
-    return cropPano(m);
-}
-
-
 void featurePairAuto(const vector<Mat>& images, float conf_thresh, vector<ImageFeatures>& features, vector<MatchesInfo>& pairwise_matches) {
     string features_type = "surf";
-    float match_conf = 0.65f;
+    float match_conf = 0.50f;
 
     spdlog::info("Finding features...");
     Ptr<Feature2D> finder;
@@ -519,7 +381,7 @@ void featurePairManual(const vector<PointPair>& point_pairs, const vector<Size>&
     pairwise_matches.push_back(match_info);
 }
 
-void finding(const vector<string>& img_names, const vector<PointPair>& point_pairs, vector<CameraParams>& cameras, vector<UMat>& masks_warped) {
+void finding(const vector<Mat>& src_images, const vector<PointPair>& point_pairs, vector<CameraParams>& cameras, vector<UMat>& masks_warped) {
 float conf_thresh = 0.1f;
 string ba_cost_func = "ray";
 string ba_refine_mask = "xxxxx";
@@ -530,12 +392,11 @@ std::string save_graph_to;
 string seam_find_type = "gc_color";
 
     // Check if have enough images
-    int num_images = static_cast<int>(img_names.size());
+    int num_images = static_cast<int>(src_images.size());
     if (num_images < 2) {
         spdlog::info("Need more images");
     }
 
-    Mat full_img;
     vector<ImageFeatures> features(num_images);
     vector<MatchesInfo> pairwise_matches;
     vector<Mat> images(num_images);
@@ -543,13 +404,10 @@ string seam_find_type = "gc_color";
 
     spdlog::info("Built rectifying maps");
     for (int i = 0; i < num_images; ++i) {
-        full_img = imread(samples::findFile(img_names[i]));
-        spdlog::info("Read image");
-        full_img_sizes[i] = full_img.size();
-
-        images[i] = full_img.clone();
+        images[i] = src_images[i].clone();
+        full_img_sizes[i] = images[i].size();
     }
-    full_img.release();
+
     if(point_pairs.empty())
         featurePairAuto(images, conf_thresh, features, pairwise_matches);
     else
