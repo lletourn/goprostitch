@@ -192,6 +192,7 @@ int main(int argc, const char ** argv) {
         }
 
         spdlog::info("Reading video packets");
+        namedWindow("Pano", WINDOW_NORMAL);
         while(left_video_packets.find(idx_to_process) != left_video_packets.end() && right_video_packets.find(idx_to_process) != right_video_packets.end()) {
             unique_ptr<LeftRightPacket> lr_packet(new LeftRightPacket());
             

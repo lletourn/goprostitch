@@ -27,8 +27,6 @@ class FrameStitcher {
     bool is_done();
 
     void close();
- private:
-    void stitch(const std::vector<cv::Mat>& images, cv::Mat& panoramic_image);
 
  private:
     bool match_histogram_;
