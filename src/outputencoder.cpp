@@ -24,7 +24,8 @@ OutputEncoder::OutputEncoder(
     bool use_left_audio,
     Rational video_time_base,
     Rational audio_time_base,
-    uint32_t queue_size)
+    uint32_t queue_size,
+    uint32_t nb_threads)
 : filename_(filename),
   use_left_audio_(use_left_audio),
   running_(false),
@@ -34,7 +35,8 @@ OutputEncoder::OutputEncoder(
   video_time_base_(video_time_base),
   left_audio_packet_queue_(left_audio_queue),
   right_audio_packet_queue_(right_audio_queue),
-  panoramic_packet_queue_(queue_size) {
+  panoramic_packet_queue_(queue_size),
+  pool_size_(nb_threads) {
     audio_time_base_ = (AVRational){(int)audio_time_base.num, (int)audio_time_base.den};
 };
 
@@ -104,8 +106,8 @@ void OutputEncoder::init_video() {
         throw runtime_error("Could not allocate video stream");
     }
 
-    //video_codec_ = avcodec_find_encoder(AV_CODEC_ID_HEVC);
-    video_codec_ = avcodec_find_encoder(AV_CODEC_ID_H264);
+    video_codec_ = avcodec_find_encoder(AV_CODEC_ID_HEVC);
+    //video_codec_ = avcodec_find_encoder(AV_CODEC_ID_H264);
     if (!video_codec_) {
         spdlog::error("Video codec not found");
         throw runtime_error("Video codec not found");
@@ -117,22 +119,26 @@ void OutputEncoder::init_video() {
         throw runtime_error("Could not allocate video codec context");
     }
 
+    uint32_t gop = 600;
+    string preset = "slow";
 
     AVDictionary *opt=NULL;
-    video_codec_ctx_->thread_count = 1; // x264
-    //av_dict_set(&opt, "x265-params", "pools=16", 0);
+    // video_codec_ctx_->thread_count = 1; // x264
+    stringstream pool_ss;
+    pool_ss << "pools=" << pool_size_;
+    av_dict_set(&opt, "x265-params", pool_ss.str().c_str(), 0);
     av_dict_set(&opt, "crf", "24", 0);
-    av_dict_set(&opt, "preset", "fast", 0);
-    av_dict_set(&opt, "keyint", "600", 0);
+    av_dict_set(&opt, "preset", preset.c_str(), 0);
+    av_dict_set(&opt, "keyint", itoa(gop), 0);
 
     video_codec_ctx_->pix_fmt = AV_PIX_FMT_YUV420P;
     AVRational tb;
     tb.num = video_time_base_.num;
     tb.den = video_time_base_.den;
     video_codec_ctx_->time_base = tb;
-    video_codec_ctx_->gop_size = 600;
+    video_codec_ctx_->gop_size = gop;
     video_codec_ctx_->framerate = (AVRational){60000, 1001};
-    av_opt_set(video_codec_ctx_->priv_data, "preset", "slow", 0);
+    av_opt_set(video_codec_ctx_->priv_data, "preset", preset.c_str(), 0);
     av_opt_set(video_codec_ctx_->priv_data, "crf", "24", 0);
     video_codec_ctx_->thread_type = FF_THREAD_FRAME;
     video_codec_ctx_->thread_count = 1;

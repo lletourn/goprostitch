@@ -27,7 +27,8 @@ int main(int argc, const char ** argv) {
         "{output |<none>| Output video }"
         "{camparams |<none>| Camera parameter filename }"
         "{camintrinsics |<none>| Camera instrinsics filename }"
-        "{threads | 1 | Nb of stitching threads. There are 3 threads by default for video reading(2) and video encoding(~1). }"
+        "{stitchthreads | 1 | Nb of stitching threads. There are 2 threads by default for video reading. }"
+        "{encthreads | 1 | Nb of encoding threads. There are 2 threads by default for video reading. }"
         "{fixexposure | false | Fix whitebalance between cameras }"
     ;
     CommandLineParser parser(argc, argv, keys);
@@ -43,7 +44,8 @@ int main(int argc, const char ** argv) {
     int32_t video_offset(parser.get<int32_t>("offset"));
     string camera_params_filename(parser.get<string>("camparams"));
     string camera_intrinsics_filename(parser.get<string>("camintrinsics"));
-    uint16_t nb_workers(parser.get<uint32_t>("threads"));
+    uint16_t nb_stitch_workers(parser.get<uint32_t>("stitchthreads"));
+    uint16_t nb_encoding_threads(parser.get<uint32_t>("encthreads"));
 
     Mat camera_intrinsics_K;
     Mat camera_intrinsics_distortion_coefficients;
@@ -75,7 +77,7 @@ int main(int argc, const char ** argv) {
     spdlog::info("Loading file: {}", left_filename);
     spdlog::info("Loading file: {}", right_filename);
 
-    const uint32_t input_queue_size = static_cast<uint32_t>(std::ceil((float)nb_workers/2.0));
+    const uint32_t input_queue_size = static_cast<uint32_t>(std::ceil((float)nb_stitch_workers/2.0));
     InputProcessor left_processor(left_filename, left_offset, input_queue_size);
     left_processor.initialize();
     InputProcessor right_processor(right_filename, right_offset, input_queue_size);
@@ -89,7 +91,7 @@ int main(int argc, const char ** argv) {
     ThreadSafeQueue<LeftRightPacket> stitcher_queue(input_queue_size*3);
 
     spdlog::info("Writting file: {}", output_filename);
-    OutputEncoder output_encoder(output_filename, left_processor.getOutAudioQueue(), right_processor.getOutAudioQueue(), pano_width, pano_height, use_left_audio, left_processor.video_time_base(), left_processor.audio_time_base(), input_queue_size);
+    OutputEncoder output_encoder(output_filename, left_processor.getOutAudioQueue(), right_processor.getOutAudioQueue(), pano_width, pano_height, use_left_audio, left_processor.video_time_base(), left_processor.audio_time_base(), input_queue_size, nb_encoding_threads);
     output_encoder.initialize(left_processor.audio_codec_parameters(), right_processor.audio_codec_parameters(), duration);
 
     // Start IO Threads
@@ -119,7 +121,7 @@ int main(int argc, const char ** argv) {
 
 
     vector<unique_ptr<FrameStitcher>> frame_stitchers;
-    for(uint16_t i=0; i < nb_workers; ++i) {
+    for(uint16_t i=0; i < nb_stitch_workers; ++i) {
         unique_ptr<FrameStitcher> fs(new FrameStitcher(pano_offset_x, pano_offset_y, pano_width, pano_height, stitcher_queue, output_encoder.getInPanoramicQueue(), cameras_params, camera_intrinsics_K, camera_intrinsics_distortion_coefficients, camera_intrinsics_image_size_used, masks_warped, reference_bgr_value_idxs, reference_bgr_cumsum));
         fs->start();
         frame_stitchers.push_back(move(fs));
