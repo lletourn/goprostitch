@@ -73,7 +73,8 @@ const char* keys  =
         "{zt       | false | Assume zero tangential distortion }"
         "{a        |       | Fix aspect ratio (fx/fy) to this value }"
         "{pc       | false | Fix the principal point at the center }"
-        "{sc       | false | Show detected chessboard corners after calibration }";
+        "{sc       | false | Show detected chessboard corners after calibration }"
+        "{skip     | 0     | Frames to skip }";
 }
 
 
@@ -93,6 +94,8 @@ int main(int argc, char *argv[]) {
     string outputFile = parser.get<string>(0);
 
     bool showChessboardCorners = parser.get<bool>("sc");
+
+    uint32_t frames_to_skip = parser.get<int>("skip");
 
     int calibrationFlags = 0;
     float aspectRatio = 1;
@@ -166,14 +169,18 @@ int main(int argc, char *argv[]) {
 
     uint32_t img_idx=0;
     Mat imageRsz;
-    int frames[]={1441,1443,1473,1547,1593,1639,1661,1737,1825,1873,1927,1983,2037,2097,2163,2981};
+    //int frames[]={1441,1443,1473,1547,1593,1639,1661,1737,1825,1873,1927,1983,2037,2097,2163,2981};
     int arr_idx=0;
     Size imageSize;
     while(inputVideo.grab()) {
-        if(img_idx != frames[arr_idx]) {
+        if(img_idx < frames_to_skip) {
             img_idx++;
             continue;
         }
+        //if(img_idx != frames[arr_idx]) {
+        //    img_idx++;
+        //    continue;
+        //}
         ++arr_idx;
 
         Mat image, imageCopy;
@@ -207,17 +214,17 @@ int main(int argc, char *argv[]) {
 
         resize(imageCopy, imageRsz, Size(1920,1080));
         imshow("out", imageRsz);
-        char key = (char)waitKey(waitTime);
-        //if(key == 27) break;
-        //if(key == 'c' && ids.size() > 0) {
+        char key = (char)waitKey();
+        if(key == 27) break;
+        if(key == 'c' && ids.size() > 0) {
             cout << "Frame captured: " << img_idx << endl;
             allCorners.push_back(corners);
             allIds.push_back(ids);
             allImgs.push_back(image);
             imgSize = image.size();
-        //}
-        if(img_idx == 2981)
-            break;
+        }
+        //if(img_idx == 2981)
+        //    break;
         img_idx++;
     }
     destroyWindow("out"); waitKey(1);
@@ -306,7 +313,10 @@ int main(int argc, char *argv[]) {
         initUndistortRectifyMap(cameraMatrix, distCoeffs, Mat(), optimized_camera_matrix, imageSize,  CV_16SC2, map1, map2);
 
         cout << "Undistort" << endl;
-        Mat rcopy, rimageRsz;
+        Mat rcopy;
+
+        namedWindow("out", WINDOW_NORMAL);
+        namedWindow("undistorted", WINDOW_NORMAL);
         for(unsigned int frame = 0; frame < filteredImages.size(); frame++) {
             Mat imageCopy = filteredImages[frame].clone();
             remap(imageCopy, rcopy, map1, map2, INTER_LINEAR);
@@ -318,10 +328,8 @@ int main(int argc, char *argv[]) {
             //    }
             //}
 
-            resize(imageCopy, imageRsz, Size(1920,1080));
-            resize(rcopy, rimageRsz, Size(1920,1080));
-            imshow("out", imageRsz);
-            imshow("rout", rimageRsz);
+            imshow("out", imageCopy);
+            imshow("undistorted", rcopy);
             char key = (char)waitKey(0);
             if(key == 27) break;
         }
