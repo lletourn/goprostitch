@@ -129,7 +129,7 @@ void OutputEncoder::init_video() {
     av_dict_set(&opt, "x265-params", pool_ss.str().c_str(), 0);
     av_dict_set(&opt, "crf", "24", 0);
     av_dict_set(&opt, "preset", preset.c_str(), 0);
-    av_dict_set(&opt, "keyint", itoa(gop), 0);
+    av_dict_set(&opt, "keyint", to_string(gop).c_str(), 0);
 
     video_codec_ctx_->pix_fmt = AV_PIX_FMT_YUV420P;
     AVRational tb;
