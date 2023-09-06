@@ -40,7 +40,7 @@ class InputProcessor {
     const std::string filename_;
     const uint32_t offset_;
     uint64_t timecode_;
-    bool running_;
+    std::atomic<bool> running_;
     std::atomic<bool> done_;
     Rational video_time_base_;
     Rational audio_time_base_;

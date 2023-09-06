@@ -23,7 +23,7 @@ float compute_warped_image_scale(const vector<CameraParams>& cameras) {
     return warped_image_scale;
 }
 
-ImageCompositing::ImageCompositing(const std::vector<cv::detail::CameraParams>& cameras, const std::vector<cv::UMat>& masks_warped, const vector<Size> images_size)
+ImageCompositing::ImageCompositing(const vector<cv::detail::CameraParams>& cameras, const std::vector<cv::UMat>& masks_warped, const vector<Size> images_size)
 : cameras_parameters_(cameras), blending_masks_(masks_warped.size()), corners_(cameras.size()), sizes_(cameras.size()) {
 
     float warped_image_scale = compute_warped_image_scale(cameras);
@@ -60,6 +60,8 @@ ImageCompositing::ImageCompositing(const std::vector<cv::detail::CameraParams>& 
         dilate(masks_warped[img_idx], dilated_mask, Mat());
         resize(dilated_mask, seam_mask, mask_warped.size(), 0, 0, INTER_LINEAR_EXACT);
         blending_masks_[img_idx] = seam_mask & mask_warped;
+
+        mask.release();
     }
 }
 
@@ -73,7 +75,9 @@ void ImageCompositing::compose(const vector<Mat>& images, Mat& output_image) {
     full_imgs[1] = images[1].clone();
     
     Mat img;
-int blend_type = Blender::NO;
+//int blend_type = Blender::NO;
+//int blend_type = Blender::FEATHER;
+int blend_type = Blender::MULTI_BAND;
 float blend_strength = 5;
 
     Mat img_warped, img_warped_s;

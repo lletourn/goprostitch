@@ -293,8 +293,7 @@ int main(int argc, char *argv[]) {
         aruco::calibrateCameraCharuco(allCharucoCorners, allCharucoIds, charucoboard, imgSize,
                                       cameraMatrix, distCoeffs, rvecs, tvecs, calibrationFlags);
 
-    bool saveOk =  saveCameraParams(outputFile, imgSize, aspectRatio, calibrationFlags,
-                                    cameraMatrix, distCoeffs, repError);
+    bool saveOk =  saveCameraParams(outputFile, imgSize, aspectRatio, calibrationFlags, cameraMatrix, distCoeffs, repError);
     if(!saveOk) {
         cerr << "Cannot save output file" << endl;
         return 0;

@@ -231,7 +231,7 @@ void FrameStitcher::run() {
 
             unique_ptr<PanoramicPacket> pano_packet(new PanoramicPacket);
             pano_packet->data_size = panoramic_image_yuv.total() * panoramic_image_yuv.elemSize();
-            pano_packet->data = unique_ptr<uint8_t>(new uint8_t[pano_packet->data_size]);
+            pano_packet->data = unique_ptr<uint8_t[]>(new uint8_t[pano_packet->data_size]);
 
             memcpy(pano_packet->data.get(), panoramic_image_yuv.data, pano_packet->data_size);
 

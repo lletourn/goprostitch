@@ -140,7 +140,7 @@ void InputProcessor::run() {
     uint32_t video_idx = 0;
     int32_t ret;
     chrono::steady_clock::time_point start = chrono::steady_clock::now();
-    while (av_read_frame(av_format_ctx_, packet) >= 0) {
+    while (av_read_frame(av_format_ctx_, packet) >= 0 && running_.load() == true) {
         if (packet->stream_index == video_stream_) {
             chrono::steady_clock::time_point video_start = chrono::steady_clock::now();
             ret = avcodec_send_packet(video_codec_ctx_, packet);
@@ -160,7 +160,7 @@ void InputProcessor::run() {
 
                 if(video_idx >= offset_) {
                     uint32_t data_size = av_image_get_buffer_size(video_codec_ctx_->pix_fmt, video_codec_ctx_->width, video_codec_ctx_->height, 1);
-                    unique_ptr<uint8_t> data(new uint8_t[data_size]);
+                    unique_ptr<uint8_t[]> data(new uint8_t[data_size]);
                     av_image_copy_to_buffer(data.get(), data_size, video_frame->data, video_frame->linesize, video_codec_ctx_->pix_fmt, video_codec_ctx_->width, video_codec_ctx_->height, 1);
 
                     unique_ptr<VideoPacket> input_packet(new VideoPacket);
@@ -195,18 +195,19 @@ void InputProcessor::run() {
         av_packet_unref(packet);
     }
 
+    av_packet_free(&packet);
+
     // Free the YUV frame
     av_frame_free(&video_frame);
     av_free(video_frame);
 
     // Close the codecs
-    avcodec_close(video_codec_ctx_);
-    avcodec_close(video_codec_ctx_orig_);
+    avcodec_free_context(&video_codec_ctx_);
+    avcodec_free_context(&video_codec_ctx_orig_);
 
     // Close the video file
     avformat_close_input(&av_format_ctx_);
 
-    av_format_ctx_ = NULL;
-
+    running_ = false;
     done_ = true;
 }

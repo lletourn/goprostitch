@@ -19,9 +19,9 @@ struct Rational {
 
 struct LeftRightPacket {
     uint64_t left_data_size;
-    std::unique_ptr<uint8_t> left_data;
+    std::unique_ptr<uint8_t[]> left_data;
     uint64_t right_data_size;
-    std::unique_ptr<uint8_t> right_data;
+    std::unique_ptr<uint8_t[]> right_data;
     uint32_t width;
     uint32_t height;
     uint32_t pts;
@@ -36,7 +36,7 @@ struct PanoramicPacket {
     double pts_time;
     uint32_t idx;
     uint64_t data_size;
-    std::unique_ptr<uint8_t> data;
+    std::unique_ptr<uint8_t[]> data;
 };
 struct VideoPacket {
     uint32_t width;
@@ -45,7 +45,7 @@ struct VideoPacket {
     double pts_time;
     uint32_t idx;
     uint64_t data_size;
-    std::unique_ptr<uint8_t> data;
+    std::unique_ptr<uint8_t[]> data;
 };
 
 struct PacketDeleter {

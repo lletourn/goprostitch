@@ -220,9 +220,30 @@ int main(int argc, const char ** argv) {
             break;
         }
     }
+
+    // Cleanup
     left_processor.stop();
     right_processor.stop();
 
+    for(auto& frame_stitcher : frame_stitchers) {
+        frame_stitcher->stop();
+    }
+
+    bool read_frame(true);
+    while(read_frame) {
+        read_frame = false;
+        unique_ptr<VideoPacket> left_video_packet(left_processor.getOutVideoQueue().pop(chrono::seconds(1)));
+        if(left_video_packet) {
+            read_frame = true;
+        }
+
+        unique_ptr<VideoPacket> right_video_packet(right_processor.getOutVideoQueue().pop(chrono::seconds(1)));
+        if(right_video_packet) {
+            read_frame = true;
+        }
+    }
     output_encoder.stop();
+    camera_intrinsics_K.release();
+    camera_intrinsics_distortion_coefficients.release();
     spdlog::info("Done");
 }

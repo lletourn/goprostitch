@@ -54,7 +54,7 @@ void readSeamData(const string& cameras_filename, vector<CameraParams>& cameras,
             cp.t.at<double>(i) = t[i].GetDouble();
         }
 
-        cameras.push_back(cp);
+        cameras.push_back(move(cp));
         cout << "Initial camera intrinsics #" << cam_idx+1 << ":\nK:\n" << cp.K() << "\nR:\n" << cp.R << endl;
         cam_idx++;
     }
@@ -73,8 +73,6 @@ void readCalibration(const string& calibration_filename, Mat& K, Mat& distortion
     camera_params_doc.ParseStream(isw);
 
     K = Mat::zeros(3, 3, CV_64F);
-    distortion_coefficients = Mat::zeros(3, 3, CV_64F);
-
     for (SizeType i = 0; i < camera_params_doc["K"].Size(); ++i) {
         for (SizeType j=0; j < camera_params_doc["K"][i].Size(); ++j) {
             K.at<double>(i,j) = camera_params_doc["K"][i][j].GetDouble();

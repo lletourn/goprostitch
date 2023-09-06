@@ -61,7 +61,7 @@ std::string type2str(int type) {
 }
 
 
-void finding(const vector<Mat>& src_images, const vector<PointPair>& point_pairs, vector<CameraParams>& cameras, vector<UMat>& masks_warped);
+void finding(const string& features_type, const vector<Mat>& src_images, const vector<PointPair>& point_pairs, vector<CameraParams>& cameras, vector<UMat>& masks_warped);
 
 Rect cropPano(const Mat& panorama);
 
@@ -144,6 +144,7 @@ int main(int argc, char* argv[]) {
         "{output |<none>| Output panorama }"
         "{camparams | | Camera parameter filename }"
         "{findcamparams | false | Generate camera parameters or read them from the file }"
+        "{featuresfinder | sift | Features finder to use. sift, surf, orb}"
     ;
 
     CommandLineParser parser(argc, argv, keys);
@@ -156,7 +157,7 @@ int main(int argc, char* argv[]) {
 
     vector<Mat> images = {imread(parser.get<string>("left")), imread(parser.get<string>("right"))};
     vector<Size> images_size = {images[0].size(), images[1].size()};
-    string result_name = parser.get<string>("output");;
+    string result_name = parser.get<string>("output");
 
     vector<CameraParams> cameras;
     vector<UMat> masks_warped;
@@ -167,11 +168,12 @@ int main(int argc, char* argv[]) {
         readSeamData(parser.get<string>("camparams"), cameras, masks_warped, rect);
     } else {
         spdlog::info("Generate camera params");
+        string features_type = parser.get<string>("featuresfinder");
 
         vector<PointPair> point_pairs;
         if(parser.has("keypoints"))
             point_pairs = readPointPairs(parser.get<string>("keypoints"));
-        finding(images, point_pairs, cameras, masks_warped);
+        finding(features_type, images, point_pairs, cameras, masks_warped);
     }
 
     Mat output_image;
@@ -294,8 +296,7 @@ Rect cropPano(const Mat& panorama) {
     return Rect(x1, y1, x2-x1, y2-y1);
 }
 
-void featurePairAuto(const vector<Mat>& images, float conf_thresh, vector<ImageFeatures>& features, vector<MatchesInfo>& pairwise_matches) {
-    string features_type = "surf";
+void featurePairAuto(const string& features_type, const vector<Mat>& images, float conf_thresh, vector<ImageFeatures>& features, vector<MatchesInfo>& pairwise_matches) {
     float match_conf = 0.50f;
 
     spdlog::info("Finding features...");
@@ -383,7 +384,7 @@ void featurePairManual(const vector<PointPair>& point_pairs, const vector<Size>&
     pairwise_matches.push_back(match_info);
 }
 
-void finding(const vector<Mat>& src_images, const vector<PointPair>& point_pairs, vector<CameraParams>& cameras, vector<UMat>& masks_warped) {
+void finding(const string& features_type, const vector<Mat>& src_images, const vector<PointPair>& point_pairs, vector<CameraParams>& cameras, vector<UMat>& masks_warped) {
 float conf_thresh = 0.1f;
 string ba_cost_func = "ray";
 string ba_refine_mask = "xxxxx";
@@ -391,7 +392,7 @@ bool do_wave_correct = true;
 WaveCorrectKind wave_correct = detail::WAVE_CORRECT_HORIZ;
 bool save_graph = false;
 std::string save_graph_to;
-string seam_find_type = "gc_color";
+string seam_find_type = "voronoi";
 
     // Check if have enough images
     int num_images = static_cast<int>(src_images.size());
@@ -411,7 +412,7 @@ string seam_find_type = "gc_color";
     }
 
     if(point_pairs.empty())
-        featurePairAuto(images, conf_thresh, features, pairwise_matches);
+        featurePairAuto(features_type, images, conf_thresh, features, pairwise_matches);
     else
         featurePairManual(point_pairs, full_img_sizes, features, pairwise_matches);
     
@@ -514,20 +515,17 @@ string seam_find_type = "gc_color";
         seam_finder = makePtr<detail::NoSeamFinder>();
     else if (seam_find_type == "voronoi")
         seam_finder = makePtr<detail::VoronoiSeamFinder>();
-    else if (seam_find_type == "gc_color")
-    {
+    else if (seam_find_type == "gc_color") {
         seam_finder = makePtr<detail::GraphCutSeamFinder>(GraphCutSeamFinderBase::COST_COLOR);
     }
-    else if (seam_find_type == "gc_colorgrad")
-    {
+    else if (seam_find_type == "gc_colorgrad") {
         seam_finder = makePtr<detail::GraphCutSeamFinder>(GraphCutSeamFinderBase::COST_COLOR_GRAD);
     }
     else if (seam_find_type == "dp_color")
         seam_finder = makePtr<detail::DpSeamFinder>(DpSeamFinder::COLOR);
     else if (seam_find_type == "dp_colorgrad")
         seam_finder = makePtr<detail::DpSeamFinder>(DpSeamFinder::COLOR_GRAD);
-    if (!seam_finder)
-    {
+    if (!seam_finder) {
         cout << "Can't create the following seam finder '" << seam_find_type << "'\n";
     }
 
