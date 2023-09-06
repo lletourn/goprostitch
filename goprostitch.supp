@@ -1,0 +1,41 @@
+{
+   OpenCV Mat eye camera params
+   Memcheck:Leak
+   match-leak-kinds: reachable
+   fun:_Znwm
+   fun:_ZN2cv17MatOp_Initializer8makeExprERNS_7MatExprEiNS_5Size_IiEEid
+   fun:_ZN2cv3Mat3eyeEiii
+   fun:_ZN2cv6detail12CameraParamsC1Ev
+   fun:_Z12readSeamDataRKNSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEEERSt6vectorIN2cv6detail12CameraParamsESaISA_EERS7_INS8_4UMatESaISE_EERNS8_5Rect_IiEE
+   fun:_Z14process_videosRKNSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEEES6_iS6_S6_ttb
+   fun:main
+}
+{
+   OpenCV Mat zero
+   Memcheck:Leak
+   match-leak-kinds: reachable
+   fun:_Znwm
+   fun:_ZN2cv17MatOp_Initializer8makeExprERNS_7MatExprEiNS_5Size_IiEEid
+   fun:_ZN2cv3Mat5zerosEiii
+   fun:_Z15readCalibrationRKNSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEEERN2cv3MatES9_RNS7_5Size_IiEE
+   fun:_Z14process_videosRKNSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEEES6_iS6_S6_ttb
+   fun:main
+}
+{
+   OpenCV Camera Params vector copy
+   Memcheck:Leak
+   match-leak-kinds: reachable
+   fun:_Znwm
+   fun:_ZN2cv3ipp6useIPPEv
+   fun:_ZNK2cv3Mat6copyToERKNS_12_OutputArrayE
+   fun:_ZNK2cv3Mat5cloneEv
+   fun:_ZN2cv6detail12CameraParamsaSERKS1_
+   fun:_ZN2cv6detail12CameraParamsC1ERKS1_
+   fun:_ZN9__gnu_cxx13new_allocatorIN2cv6detail12CameraParamsEE9constructIS3_JS3_EEEvPT_DpOT0_
+   fun:_ZNSt16allocator_traitsISaIN2cv6detail12CameraParamsEEE9constructIS2_JS2_EEEvRS3_PT_DpOT0_
+   fun:_ZNSt6vectorIN2cv6detail12CameraParamsESaIS2_EE17_M_realloc_insertIJS2_EEEvN9__gnu_cxx17__normal_iteratorIPS2_S4_EEDpOT_
+   fun:_ZNSt6vectorIN2cv6detail12CameraParamsESaIS2_EE12emplace_backIJS2_EEERS2_DpOT_
+   fun:_ZNSt6vectorIN2cv6detail12CameraParamsESaIS2_EE9push_backEOS2_
+   fun:_Z12readSeamDataRKNSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEEERSt6vectorIN2cv6detail12CameraParamsESaISA_EERS7_INS8_4UMatESaISE_EERNS8_5Rect_IiEE
+}
+

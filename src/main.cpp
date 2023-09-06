@@ -14,42 +14,22 @@
 using namespace std;
 using namespace cv;
 
-
-int main(int argc, const char ** argv) {
-    spdlog::set_pattern("%Y%m%dT%H:%M:%S.%e [%^%l%$] -%n- -%t- : %v");
-    spdlog::set_level(spdlog::level::debug);
-
-    const String keys =
-        "{help h usage ? | | print this message }"
-        "{left |<none>| Left video }"
-        "{right |<none>| Right video }"
-        "{offset | 0 | Video frame offset. Positive offsets shifts right and takes left audio. Negative is the opposite }"
-        "{output |<none>| Output video }"
-        "{camparams |<none>| Camera parameter filename }"
-        "{camintrinsics |<none>| Camera instrinsics filename }"
-        "{stitchthreads | 1 | Nb of stitching threads. There are 2 threads by default for video reading. }"
-        "{encthreads | 1 | Nb of encoding threads. There are 2 threads by default for video reading. }"
-        "{fixexposure | false | Fix whitebalance between cameras }"
-    ;
-    CommandLineParser parser(argc, argv, keys);
-    parser.about("Seam finder");
-
-    if(parser.has("help")) {
-        parser.printMessage();
-        return 0;
-    }
-    string left_filename(parser.get<string>("left"));
-    string right_filename(parser.get<string>("right"));
-    string output_filename(parser.get<string>("output"));
-    int32_t video_offset(parser.get<int32_t>("offset"));
-    string camera_params_filename(parser.get<string>("camparams"));
-    string camera_intrinsics_filename(parser.get<string>("camintrinsics"));
-    uint16_t nb_stitch_workers(parser.get<uint32_t>("stitchthreads"));
-    uint16_t nb_encoding_threads(parser.get<uint32_t>("encthreads"));
+void process_videos(
+    const string& left_filename,
+    const string& right_filename,
+    const string& output_filename,
+    const int32_t video_offset,
+    const string& camera_params_filename,
+    const string& camera_intrinsics_filename,
+    const uint16_t nb_stitch_workers,
+    const uint16_t nb_encoding_threads,
+    const bool fix_exposure
+) {
 
     Mat camera_intrinsics_K;
     Mat camera_intrinsics_distortion_coefficients;
     Size camera_intrinsics_image_size_used;
+
     readCalibration(camera_intrinsics_filename, camera_intrinsics_K, camera_intrinsics_distortion_coefficients, camera_intrinsics_image_size_used);
 
     uint32_t left_offset;
@@ -105,7 +85,7 @@ int main(int argc, const char ** argv) {
     spdlog::info("Find Ref frame for white balance");
     vector<vector<uint32_t>> reference_bgr_value_idxs;
     vector<vector<double>> reference_bgr_cumsum;
-    if(parser.get<bool>("fixexposure")) {
+    if(fix_exposure) {
         spdlog::info("Fixing exposure");
         while(true) {
             unique_ptr<VideoPacket> left_input_packet(left_processor.getOutVideoQueue().pop(chrono::seconds(1)));
@@ -245,5 +225,42 @@ int main(int argc, const char ** argv) {
     output_encoder.stop();
     camera_intrinsics_K.release();
     camera_intrinsics_distortion_coefficients.release();
+}
+
+int main(int argc, const char ** argv) {
+    cv::setNumThreads(0);
+    spdlog::set_pattern("%Y%m%dT%H:%M:%S.%e [%^%l%$] -%n- -%t- : %v");
+    spdlog::set_level(spdlog::level::debug);
+
+    const String keys =
+        "{help h usage ? | | print this message }"
+        "{left |<none>| Left video }"
+        "{right |<none>| Right video }"
+        "{offset | 0 | Video frame offset. Positive offsets shifts right and takes left audio. Negative is the opposite }"
+        "{output |<none>| Output video }"
+        "{camparams |<none>| Camera parameter filename }"
+        "{camintrinsics |<none>| Camera instrinsics filename }"
+        "{stitchthreads | 1 | Nb of stitching threads. There are 2 threads by default for video reading. }"
+        "{encthreads | 1 | Nb of encoding threads. There are 2 threads by default for video reading. }"
+        "{fixexposure | false | Fix whitebalance between cameras }"
+    ;
+    CommandLineParser parser(argc, argv, keys);
+    parser.about("Seam finder");
+
+    if(parser.has("help")) {
+        parser.printMessage();
+        return 0;
+    }
+    string left_filename(parser.get<string>("left"));
+    string right_filename(parser.get<string>("right"));
+    string output_filename(parser.get<string>("output"));
+    int32_t video_offset(parser.get<int32_t>("offset"));
+    string camera_params_filename(parser.get<string>("camparams"));
+    string camera_intrinsics_filename(parser.get<string>("camintrinsics"));
+    uint16_t nb_stitch_workers(parser.get<uint32_t>("stitchthreads"));
+    uint16_t nb_encoding_threads(parser.get<uint32_t>("encthreads"));
+    bool fix_exposure(parser.get<bool>("fixexposure"));
+
+    process_videos(left_filename, right_filename, output_filename, video_offset, camera_params_filename, camera_intrinsics_filename, nb_stitch_workers, nb_encoding_threads, fix_exposure);
     spdlog::info("Done");
 }
