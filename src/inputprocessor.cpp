@@ -12,7 +12,7 @@ extern "C" {
 using namespace std;
 
 InputProcessor::InputProcessor(const string& filename, uint32_t offset, uint32_t queue_size)
-: filename_(filename), offset_(offset), timecode_(0), running_(false), done_(false), video_packet_queue_(queue_size), audio_packet_queue_(queue_size), video_time_base_(Rational(0,0)), audio_time_base_(Rational(0,0)) {
+: filename_(filename), offset_(offset), timecode_(0), running_(false), done_(false), video_packet_queue_(queue_size), audio_packet_queue_(queue_size), video_time_base_(Rational(0,0)), video_frame_rate_(Rational(0,0)), audio_time_base_(Rational(0,0)) {
     av_format_ctx_ = NULL;
 }
 
@@ -107,6 +107,7 @@ void InputProcessor::initialize() {
         spdlog::error("Could not copy video codec context.");
         throw runtime_error("Error occured");
     }
+    video_frame_rate_ = Rational(av_format_ctx_->streams[video_stream_]->r_frame_rate.num, av_format_ctx_->streams[video_stream_]->r_frame_rate.den);
     video_codec_ctx_->thread_type = FF_THREAD_FRAME;
     video_codec_ctx_->thread_count = 1;
     spdlog::info("SAR: {} / {}", video_codec_ctx_->sample_aspect_ratio.num, video_codec_ctx_->sample_aspect_ratio.den);

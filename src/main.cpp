@@ -57,7 +57,7 @@ void process_videos(
     spdlog::info("Loading file: {}", left_filename);
     spdlog::info("Loading file: {}", right_filename);
 
-    const uint32_t input_queue_size = static_cast<uint32_t>(std::ceil((float)nb_stitch_workers/2.0));
+    const uint32_t input_queue_size = nb_stitch_workers;
     InputProcessor left_processor(left_filename, left_offset, input_queue_size);
     left_processor.initialize();
     InputProcessor right_processor(right_filename, right_offset, input_queue_size);
@@ -68,10 +68,10 @@ void process_videos(
     double duration = left_processor.duration();
     if(duration > right_processor.duration())
         duration = right_processor.duration();
-    ThreadSafeQueue<LeftRightPacket> stitcher_queue(input_queue_size*3);
+    ThreadSafeQueue<LeftRightPacket> stitcher_queue(input_queue_size);
 
     spdlog::info("Writting file: {}", output_filename);
-    OutputEncoder output_encoder(output_filename, left_processor.getOutAudioQueue(), right_processor.getOutAudioQueue(), pano_width, pano_height, use_left_audio, left_processor.video_time_base(), left_processor.audio_time_base(), input_queue_size, nb_encoding_threads);
+    OutputEncoder output_encoder(output_filename, left_processor.getOutAudioQueue(), right_processor.getOutAudioQueue(), pano_width, pano_height, use_left_audio, left_processor.video_time_base(), left_processor.video_frame_rate(), left_processor.audio_time_base(), input_queue_size, nb_encoding_threads);
     output_encoder.initialize(left_processor.audio_codec_parameters(), right_processor.audio_codec_parameters(), duration);
 
     // Start IO Threads

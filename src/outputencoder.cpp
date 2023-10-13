@@ -23,6 +23,7 @@ OutputEncoder::OutputEncoder(
     uint32_t height,
     bool use_left_audio,
     Rational video_time_base,
+    Rational video_frame_rate,
     Rational audio_time_base,
     uint32_t queue_size,
     uint32_t nb_threads)
@@ -33,6 +34,7 @@ OutputEncoder::OutputEncoder(
   video_width_(width),
   video_height_(height),
   video_time_base_(video_time_base),
+  video_frame_rate_(video_frame_rate),
   left_audio_packet_queue_(left_audio_queue),
   right_audio_packet_queue_(right_audio_queue),
   panoramic_packet_queue_(queue_size),
@@ -119,7 +121,9 @@ void OutputEncoder::init_video() {
         throw runtime_error("Could not allocate video codec context");
     }
 
-    uint32_t gop = 600;
+    AVRational fr = av_make_q(video_frame_rate_.num, video_frame_rate_.den);
+    double fr_dbl = av_q2d(fr);
+    uint32_t gop = (uint32_t) (round(fr_dbl / 10.0) * 100.0); // 59.94 would be 599.4, we want 600.)
     string preset = "slow";
 
     AVDictionary *opt=NULL;
@@ -137,7 +141,7 @@ void OutputEncoder::init_video() {
     tb.den = video_time_base_.den;
     video_codec_ctx_->time_base = tb;
     video_codec_ctx_->gop_size = gop;
-    video_codec_ctx_->framerate = (AVRational){60000, 1001};
+    video_codec_ctx_->framerate = fr;
     av_opt_set(video_codec_ctx_->priv_data, "preset", preset.c_str(), 0);
     av_opt_set(video_codec_ctx_->priv_data, "crf", "24", 0);
     video_codec_ctx_->thread_type = FF_THREAD_FRAME;

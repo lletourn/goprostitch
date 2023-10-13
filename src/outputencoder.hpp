@@ -14,7 +14,7 @@ extern "C" {
 
 class OutputEncoder {
  public:
-    OutputEncoder(const std::string& filename, ThreadSafeQueue<AVPacket, PacketDeleter>& left_audio_queue, ThreadSafeQueue<AVPacket, PacketDeleter>& right_audio_queue, uint32_t width, uint32_t height, bool use_left_audio, Rational video_time_base, Rational audio_time_base, uint32_t queue_size, uint32_t nb_threads);
+    OutputEncoder(const std::string& filename, ThreadSafeQueue<AVPacket, PacketDeleter>& left_audio_queue, ThreadSafeQueue<AVPacket, PacketDeleter>& right_audio_queue, uint32_t width, uint32_t height, bool use_left_audio, Rational video_time_base, Rational video_frame_rate, Rational audio_time_base, uint32_t queue_size, uint32_t nb_threads);
     ~OutputEncoder();
 
     void initialize(const AVCodecParameters* left_audio_codec_parameters, const AVCodecParameters* right_audio_codec_parameters, double total_duration);
@@ -40,6 +40,7 @@ class OutputEncoder {
     uint32_t video_width_;
     uint32_t video_height_;
     Rational video_time_base_;
+    Rational video_frame_rate_;
     uint32_t pool_size_;
 
     ThreadSafeQueue<AVPacket, PacketDeleter>& left_audio_packet_queue_;

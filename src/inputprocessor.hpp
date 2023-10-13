@@ -26,6 +26,7 @@ class InputProcessor {
     bool is_done();
 
     Rational video_time_base() {return video_time_base_;};
+    Rational video_frame_rate() {return video_frame_rate_;};
     Rational audio_time_base() {return audio_time_base_;};
     double duration() {return duration_;};
     // Pointer is owned by this class
@@ -43,6 +44,7 @@ class InputProcessor {
     std::atomic<bool> running_;
     std::atomic<bool> done_;
     Rational video_time_base_;
+    Rational video_frame_rate_;
     Rational audio_time_base_;
     double duration_;
 
