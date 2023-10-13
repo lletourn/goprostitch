@@ -24,6 +24,10 @@ add_executable(${PROJECT_NAME} ${CMAKE_SOURCE_DIR}/src/main.cpp ${CMAKE_SOURCE_D
 set_property(TARGET ${PROJECT_NAME} PROPERTY CXX_STANDARD 17)
 target_link_libraries(${PROJECT_NAME} PRIVATE PkgConfig::LIBAV ${OpenCV_LIBS} spdlog::spdlog)
 
+add_executable(memtst ${CMAKE_SOURCE_DIR}/src/memtst.cpp ${CMAKE_SOURCE_DIR}/src/framestitcher.cpp ${CMAKE_SOURCE_DIR}/src/compositing.cpp ${CMAKE_SOURCE_DIR}/src/inputprocessor.cpp ${CMAKE_SOURCE_DIR}/src/readers.cpp)
+set_property(TARGET memtst PROPERTY CXX_STANDARD 17)
+target_link_libraries(memtst PRIVATE PkgConfig::LIBAV ${OpenCV_LIBS} spdlog::spdlog)
+
 add_executable(calibrate ${CMAKE_SOURCE_DIR}/src/calibrate.cpp)
 set_property(TARGET calibrate PROPERTY CXX_STANDARD 17)
 target_link_libraries(calibrate PRIVATE ${OpenCV_LIBS} spdlog::spdlog)
