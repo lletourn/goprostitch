@@ -214,7 +214,7 @@ string sToHMS(double seconds) {
     minutes = seconds / 60;
     hours = minutes / 60;
 
-    buf << hours << ':' << int(minutes%60) << ':' << int((int)seconds%60);
+    buf << setfill('0') << setw(2) << hours << ':' << setw(2) << int(minutes%60) << ':' << setw(2) << int((int)seconds%60);
     return buf.str();
 }
 
