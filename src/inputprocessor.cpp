@@ -1,5 +1,6 @@
 #include "inputprocessor.hpp"
 
+#include <queue>
 #include <stdexcept>
 #include <spdlog/spdlog.h>
 
@@ -138,6 +139,10 @@ void InputProcessor::run() {
         spdlog::error("Could not alloc packet,");
         throw runtime_error("Error occured");
     }
+
+    unique_ptr<queue<AVPacketUniquePTR>> audio_buffer = unique_ptr<queue<AVPacketUniquePTR>>(new queue<AVPacketUniquePTR>());
+    double start_timestamp = std::numeric_limits<double>::max();
+
     uint32_t video_idx = 0;
     int32_t ret;
     chrono::steady_clock::time_point start = chrono::steady_clock::now();
@@ -173,6 +178,9 @@ void InputProcessor::run() {
                     input_packet->data_size = data_size;
                     input_packet->data = move(data);
 
+                    if(start_timestamp == std::numeric_limits<double>::max())
+                        start_timestamp = input_packet->pts_time;
+
                     auto delta = chrono::duration_cast<chrono::milliseconds>(chrono::steady_clock::now() - video_start).count();
                     double video_fps = (1.0/delta) * 1000.0;
  
@@ -190,8 +198,26 @@ void InputProcessor::run() {
                 throw runtime_error("Error occured");
             }
             av_packet_move_ref(audio_packet, packet);
-            avpacket_unique_ptr p(audio_packet);
-            audio_packet_queue_.push(move(p));
+            AVPacketUniquePTR p(audio_packet);
+
+            if(start_timestamp == std::numeric_limits<double>::max()) {
+                audio_buffer->push(move(p));
+            } else {
+                if(audio_buffer) {
+                    while(!audio_buffer->empty()) {
+                        AVPacketUniquePTR old_packet(move(audio_buffer->front()));
+                        audio_buffer->pop();
+                        double old_packet_timestamp = old_packet->pts * av_q2d(av_format_ctx_->streams[audio_stream_]->time_base);
+                        if(old_packet_timestamp >= start_timestamp) {
+                            audio_packet_queue_.push(move(old_packet));
+                        }
+                    }
+                    audio_buffer.reset(nullptr);
+                }
+                double packet_timestamp = p->pts * av_q2d(av_format_ctx_->streams[audio_stream_]->time_base);
+                if(packet_timestamp >= start_timestamp)
+                    audio_packet_queue_.push(move(p));
+            }
         }
         av_packet_unref(packet);
     }

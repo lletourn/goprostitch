@@ -54,4 +54,4 @@ struct PacketDeleter {
     }
 };
 
-using avpacket_unique_ptr = std::unique_ptr<AVPacket, PacketDeleter>;
+using AVPacketUniquePTR = std::unique_ptr<AVPacket, PacketDeleter>;
