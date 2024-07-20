@@ -187,10 +187,10 @@ int main(int argc, char* argv[]) {
 }
 
 Rect cropPano(const Mat& panorama) {
-    int x1 = 308;
-    int y1 = 228;
-    int x2 = 4730;
-    int y2 = 1712;
+    int x1 = 247;
+    int y1 = 277;
+    int x2 = x1+4730;
+    int y2 = y1+1712;
 
     namedWindow("Pano", WINDOW_NORMAL);
 
