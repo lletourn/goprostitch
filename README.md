@@ -38,13 +38,14 @@ Then you have a hex value of the frames since midnight. Just substract both to k
 
 .bashrc
 ```
-export FFMPEG_VERSION=5.1.3
+export FFMPEG_VERSION=7.0.2
 export FFMPEG_INSTALL_DIR=${HOME}/software/ffmpeg-${FFMPEG_VERSION}
 export PATH=${FFMPEG_INSTALL_DIR}/bin:${PATH}
 export LD_LIBRARY_PATH=${FFMPEG_INSTALL_DIR}/lib:${LD_LIBRARY_PATH}
 export PKG_CONFIG_PATH=${FFMPEG_INSTALL_DIR}/lib/pkgconfig:${PKG_CONFIG_PATH}
+export PKG_CONFIG_PATH=${HOME}/software/nv-codec-headers-12.2/lib/pkgconfig:${PKG_CONFIG_PATH}
 
-export OPENCV_VERSION=4.7.0
+export OPENCV_VERSION=4.10.0
 export OPENCV_INSTALL_DIR=${HOME}/software/opencv-${OPENCV_VERSION}
 export LD_LIBRARY_PATH=${OPENCV_INSTALL_DIR}/lib:${LD_LIBRARY_PATH}
 export PYTHONPATH=${OPENCV_INSTALL_DIR}/lib/python3.8/site-packages:${PYTHONPATH}
@@ -55,7 +56,7 @@ export LD_LIBRARY_PATH=${SPDLOG_INSTALL_DIR}/lib:${LD_LIBRARY_PATH}
 export PKG_CONFIG_PATH=${SPDLOG_INSTALL_DIR}/lib/pkgconfig:${PKG_CONFIG_PATH}
 export CMAKE_PREFIX_PATH=${SPDLOG_INSTALL_DIR}:${CMAKE_PREFIX_PATH}
 
-export VMAF_INSTALL_DIR=${HOME}/software/vmaf-2.3.1
+export VMAF_INSTALL_DIR=${HOME}/software/vmaf-3.0.0
 export PATH=${VMAF_INSTALL_DIR}/bin:${PATH}
 export LD_LIBRARY_PATH=${VMAF_INSTALL_DIR}/lib/x86_64-linux-gnu:${LD_LIBRARY_PATH}
 export PKG_CONFIG_PATH=${VMAF_INSTALL_DIR}/lib/x86_64-linux-gnu/pkgconfig:${PKG_CONFIG_PATH}
@@ -88,21 +89,24 @@ wget https://gitlab.com/AOMediaCodec/SVT-AV1/-/archive/v1.6.0/SVT-AV1-v1.6.0.tar
 tar xvf SVT-AV1-v1.6.0.tar.gz
 cd Build ; cmake -G"Unix Makefiles" -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=${HOME}/software/svt-av1-1.6.0 ../ && make -j $(nproc) && make install
 
-wget "https://github.com/Netflix/vmaf/archive/refs/tags/v2.3.1.tar.gz" -O /home/ubuntu/src/vmaf-2.3.1.tar.gz
-tar xvf vmaf-2.3.1.tar.gz
-# From Makefile modified for target dir
-cd third_party/libsvm && make lib
-cd ../..
-meson setup libvmaf/build libvmaf --buildtype release -Denable_float=true -Dprefix=${HOME}/software/vmaf-2.3.1 && ninja -vC libvmaf/build
+wget "https://github.com/Netflix/vmaf/archive/refs/tags/v3.0.0.tar.gz" -O ${HOME}/src/vmaf-3.0.0.tar.gz
+tar xvf vmaf-3.0.0.tar.gz
+meson setup libvmaf/build libvmaf --buildtype release -Denable_float=true -Dprefix=${HOME}/software/vmaf-3.0.0 && ninja -vC libvmaf/build
 cd python && python3 setup.py build_ext --build-lib .
 cd ..
-meson setup libvmaf/build libvmaf --buildtype release -Dprefix=${HOME}/software/vmaf-2.3.1 && ninja -vC libvmaf/build install
+meson setup libvmaf/build libvmaf --buildtype release -Dprefix=${HOME}/software/vmaf-3.0.0 && ninja -vC libvmaf/build install
 
 
-wget https://ffmpeg.org/releases/ffmpeg-5.1.3.tar.gz -O ~/src/ffmpeg-5.1.3.tar.gz
-tar xvf ffmpeg-5.1.3.tar.gz
-cd ffmpeg-5.1.3
-./configure --prefix=${HOME}/software/ffmpeg-5.1.3 --enable-libxml2 --enable-libfreetype --enable-gpl --enable-libx264 --enable-libx265 --enable-libsvtav1 --enable-nonfree --enable-libopus --enable-libvpx --enable-openssl --enable-libvmaf --enable-shared
+git clone https://git.videolan.org/git/ffmpeg/nv-codec-headers.git
+cd nv-codec-headers
+git checkout -b release_n12.2.72.0 n12.2.72.0
+make install PREFIX=${HOME}/software/nv-codec-headers-12.2
+
+wget https://ffmpeg.org/releases/ffmpeg-7.0.2.tar.gz -O ~/src/ffmpeg-7.0.2.tar.gz
+tar xvf ffmpeg-7.0.2.tar.gz
+cd ffmpeg-7.0.2
+./configure --prefix=${HOME}/software/ffmpeg-7.0.2 --enable-libxml2 --enable-libharfbuzz --enable-libfreetype --enable-gpl --enable-libx264 --enable-libx265 --enable-nonfree --enable-libopus --enable-libvpx --enable-openssl --enable-shared --enable-libsrt --enable-libpulse --enable-sdl2 --enable-nvenc --enable-ffnvcodec
+
 make -j $(nproc) && make install
 
 cd ~/src
@@ -110,17 +114,25 @@ wget "https://github.com/gabime/spdlog/archive/refs/tags/v1.12.0.tar.gz" -O ~/sr
 rm -rf build ; mkdir build ; cd build ; cmake -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=${HOME}/software/spdlog-1.12.0 ../ && make -j $(nproc) && make install
 
 
-wget "https://github.com/opencv/opencv/archive/refs/tags/4.7.0.tar.gz" -O ~/src/opencv-4.7.0.tar.gz
-wget "https://github.com/opencv/opencv_contrib/archive/refs/tags/4.7.0.tar.gz" -O ~/src/opencv_contrib-4.7.0.tar.gz
-tar xvf opencv-4.7.0.tar.gz
-tar xvf opencv_contrib-4.7.0.tar.gz
-cd opencv-4.7.0
-rm -rf build ; mkdir build ; cd build ; cmake -DENABLE_CXX11=ON -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=${HOME}/software/opencv-4.7.0 -DBUILD_opencv_python2=OFF -DOPENCV_EXTRA_MODULES_PATH=${HOME}/src/opencv_contrib-4.7.0/modules -DENABLE_FAST_MATH=1 ../
+wget "https://github.com/opencv/opencv/archive/refs/tags/4.10.0.tar.gz" -O ~/src/opencv-4.10.0.tar.gz
+wget "https://github.com/opencv/opencv_contrib/archive/refs/tags/4.10.0.tar.gz" -O ~/src/opencv_contrib-4.10.0.tar.gz
+tar xvf opencv-4.10.0.tar.gz
+tar xvf opencv_contrib-4.10.0.tar.gz
+cd opencv-4.10.0
 
 # Add these on desktop
 # -DBUILD_EXAMPLES=ON -DINSTALL_C_EXAMPLES=ON -DINSTALL_BIN_EXAMPLES=ON -DWITH_GTK=OFF -DWITH_QT=ON -DWITH_OPENGL=ON
-rm -rf build ; mkdir build ; cd build ; cmake -DENABLE_CXX11=ON -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=${HOME}/software/opencv-4.7.0 -DWITH_TBB=ON -DBUILD_opencv_python2=OFF -DOPENCV_EXTRA_MODULES_PATH=${HOME}/src/opencv_contrib-4.7.0/modules -DWITH_CUDA=OFF -DWITH_OPENCL=OFF -DOPENCV_GENERATE_PKGCONFIG=ON -DOPENCV_ENABLE_NONFREE=ON ../ && make -j $(nproc) && make install
+rm -rf build ; mkdir build ; cd build ; cmake -DENABLE_CXX11=ON -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=${HOME}/software/opencv-4.10.0 -DWITH_TBB=ON -DBUILD_opencv_python2=OFF -DOPENCV_EXTRA_MODULES_PATH=${HOME}/src/opencv_contrib-4.10.0/modules -DWITH_CUDA=OFF -DWITH_OPENCL=OFF -DOPENCV_GENERATE_PKGCONFIG=ON -DOPENCV_ENABLE_NONFREE=ON -DBUILD_opencv_rgbd=OFF ../ && make -j $(nproc) && make install
 ```
 
 # Compile
 rm -rf build ; mkdir build ; cd build ; cmake -DCMAKE_BUILD_TYPE=Release ../ && make -j$(nproc)
+
+# FFmpeg
+
+Some nifty commands:
+```
+# HW encode
+ffmpeg -y -hwaccel cuda -i 20241215-lhdrs-hevc.mp4 -an -c:v hevc_nvenc -pix_fmt yuv420p -preset p5 -g 600 -bf 3 -b_ref_mode middle -profile:v main -level "5.1" -rc vbr -spatial-aq 1 -cq 24 -qmin 24 -qmax 50 -maxrate 11M -rc-lookahead 20 -bufsize:v 20M  hevc_nvenc_better.mp4
+
+``` 
