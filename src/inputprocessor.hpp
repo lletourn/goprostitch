@@ -16,7 +16,7 @@ extern "C" {
 
 class InputProcessor {
  public:
-    InputProcessor(const std::string& filename, uint32_t offset, uint32_t queue_size);
+    InputProcessor(const std::string& filename, bool use_gpu, uint32_t offset, uint32_t queue_size);
     ~InputProcessor();
 
     void initialize();
@@ -41,6 +41,7 @@ class InputProcessor {
 
  private:
     const std::string filename_;
+    bool use_gpu_;
     const uint32_t offset_;
     uint64_t timecode_;
     std::atomic<bool> running_;
@@ -59,6 +60,7 @@ class InputProcessor {
     AVFormatContext* av_format_ctx_;
     AVCodecContext* video_codec_ctx_;
     const AVCodec* video_codec_;
+    AVBufferRef *hw_device_ctx_;
     int video_stream_;
     int audio_stream_;
 

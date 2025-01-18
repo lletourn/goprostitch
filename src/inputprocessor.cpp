@@ -7,14 +7,30 @@
 extern "C" {
   #include <libavutil/error.h>
   #include <libavutil/imgutils.h>
+  #include <libavutil/opt.h>
   #include <libswscale/swscale.h>
 }
 
 using namespace std;
 
-InputProcessor::InputProcessor(const string& filename, uint32_t offset, uint32_t queue_size)
-: filename_(filename), offset_(offset), timecode_(0), running_(false), done_(false), video_packet_queue_(queue_size), audio_packet_queue_(queue_size), video_time_base_(Rational(0,0)), video_frame_rate_(Rational(0,0)), audio_time_base_(Rational(0,0)) {
-    av_format_ctx_ = NULL;
+static AVPixelFormat hw_pix_fmt;
+static AVPixelFormat get_hw_format(AVCodecContext *ctx, const enum AVPixelFormat *pix_fmts) {
+    const enum AVPixelFormat *p;
+
+    for (p = pix_fmts; *p != -1; p++) {
+        if (*p == hw_pix_fmt)
+            return *p;
+    }
+
+    fprintf(stderr, "Failed to get HW surface format.\n");
+    return AV_PIX_FMT_NONE;
+}
+
+
+InputProcessor::InputProcessor(const string& filename, bool use_gpu, uint32_t offset, uint32_t queue_size)
+: filename_(filename), use_gpu_(use_gpu), offset_(offset), timecode_(0), running_(false), done_(false), video_packet_queue_(queue_size), audio_packet_queue_(queue_size), video_time_base_(Rational(0,0)), video_frame_rate_(Rational(0,0)), audio_time_base_(Rational(0,0)) {
+    av_format_ctx_ = nullptr;
+    hw_device_ctx_ = nullptr;
 }
 
 InputProcessor::~InputProcessor() {
@@ -60,6 +76,18 @@ void InputProcessor::initialize() {
         throw runtime_error("Error occured");
     }
 
+    AVHWDeviceType type;
+    if(use_gpu_) {
+        type = av_hwdevice_find_type_by_name("cuda");
+        if (type == AV_HWDEVICE_TYPE_NONE) {
+            spdlog::error("Device type {} is not supported.", "cuda");
+            spdlog::error("Available device types:");
+            while((type = av_hwdevice_iterate_types(type)) != AV_HWDEVICE_TYPE_NONE)
+                spdlog::error(" %s", av_hwdevice_get_type_name(type));
+            throw runtime_error("");
+        }
+    }
+
     int ret = avformat_open_input(&av_format_ctx_, filename_.c_str(), NULL, NULL);
     if (ret < 0) {
         // couldn't open file
@@ -72,6 +100,7 @@ void InputProcessor::initialize() {
         spdlog::error("Could not find stream information: {}", filename_);
         throw runtime_error("Could not find stream information");
     }
+
     if(spdlog::should_log(spdlog::level::debug))
         av_dump_format(av_format_ctx_, 0, filename_.c_str(), 0);
 
@@ -86,8 +115,7 @@ void InputProcessor::initialize() {
             }
 
             video_time_base_ = Rational(av_format_ctx_->streams[i]->time_base.num, av_format_ctx_->streams[i]->time_base.den);
-        }
-        else if (av_format_ctx_->streams[i]->codecpar->codec_type == AVMEDIA_TYPE_AUDIO) {
+        } else if (av_format_ctx_->streams[i]->codecpar->codec_type == AVMEDIA_TYPE_AUDIO) {
             audio_stream_ = i;
             audio_time_base_ = Rational(av_format_ctx_->streams[i]->time_base.num, av_format_ctx_->streams[i]->time_base.den);
         }
@@ -99,11 +127,38 @@ void InputProcessor::initialize() {
         throw runtime_error("Unsupported video codec");
     }
 
+    if(use_gpu_) {
+        for (uint32_t i = 0;; i++) {
+            const AVCodecHWConfig *config = avcodec_get_hw_config(video_codec_, i);
+            if (!config) {
+                spdlog::error("Decoder {} does not support device type {}.", video_codec_->name, av_hwdevice_get_type_name(type));
+                throw runtime_error("Error occured");
+            }
+            if (config->methods & AV_CODEC_HW_CONFIG_METHOD_HW_DEVICE_CTX &&
+                config->device_type == type) {
+                hw_pix_fmt = config->pix_fmt;
+                break;
+            }
+        }
+    }
+    spdlog::info("Using decoder codec: {}", video_codec_->name);
+
     video_codec_ctx_ = avcodec_alloc_context3(video_codec_);
     ret = avcodec_parameters_to_context(video_codec_ctx_, av_format_ctx_->streams[video_stream_]->codecpar);
     if (ret != 0) {
         spdlog::error("Could not copy video codec context.");
         throw runtime_error("Error occured");
+    }
+
+    if (use_gpu_) {
+        video_codec_ctx_->get_format  = get_hw_format;
+        av_opt_set_int(video_codec_ctx_, "refcounted_frames", 1, 0);
+
+        if ((av_hwdevice_ctx_create(&hw_device_ctx_, type, NULL, NULL, 0)) < 0) {
+            spdlog::error("Failed to create specified HW device.");
+            throw runtime_error("Failed to create specified HW device.");
+        }
+        video_codec_ctx_->hw_device_ctx = av_buffer_ref(hw_device_ctx_);
     }
     colorspace_ = video_codec_ctx_->colorspace;
     color_range_ = video_codec_ctx_->color_range;
@@ -145,6 +200,9 @@ void InputProcessor::run() {
     uint32_t video_idx = 0;
     int32_t ret;
     chrono::steady_clock::time_point start = chrono::steady_clock::now();
+
+    AVFrame *tmp_frame = nullptr;
+    AVFrame *sw_frame = nullptr;
     while (av_read_frame(av_format_ctx_, packet) >= 0 && running_.load() == true) {
         if (packet->stream_index == video_stream_) {
             chrono::steady_clock::time_point video_start = chrono::steady_clock::now();
@@ -159,20 +217,35 @@ void InputProcessor::run() {
                 if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF) {
                     break;
                 } else if (ret < 0) {
-                    cerr << "Error while decoding." << endl;
-                    throw runtime_error("Error occured");
+                    spdlog::error("Error while decoding.");
+                    throw runtime_error("Error while decoding.");
+                }
+
+                if (video_frame->format == hw_pix_fmt) {
+                    if (!(sw_frame = av_frame_alloc())) {
+                        spdlog::error("Can not alloc sw_frame");
+                        throw runtime_error("Can not alloc sw_frame");
+                    }
+
+                    if (av_hwframe_transfer_data(sw_frame, video_frame, 0) < 0) {
+                        spdlog::error("Error transferring the data to system memory.");
+                        throw runtime_error("Error transferring the data to system memory");
+                    }
+                    tmp_frame = sw_frame;
+                } else {
+                    tmp_frame = video_frame;
                 }
 
                 if(video_idx >= offset_) {
                     uint32_t data_size = av_image_get_buffer_size(video_codec_ctx_->pix_fmt, video_codec_ctx_->width, video_codec_ctx_->height, 1);
                     unique_ptr<uint8_t[]> data(new uint8_t[data_size]);
-                    av_image_copy_to_buffer(data.get(), data_size, video_frame->data, video_frame->linesize, video_codec_ctx_->pix_fmt, video_codec_ctx_->width, video_codec_ctx_->height, 1);
+                    av_image_copy_to_buffer(data.get(), data_size, tmp_frame->data, tmp_frame->linesize, video_codec_ctx_->pix_fmt, video_codec_ctx_->width, video_codec_ctx_->height, 1);
 
                     unique_ptr<VideoPacket> input_packet(new VideoPacket);
                     input_packet->width = video_codec_ctx_->width;
                     input_packet->height = video_codec_ctx_->height;
-                    input_packet->pts = video_frame->pts;
-                    input_packet->pts_time =  video_frame->pts * av_q2d(av_format_ctx_->streams[video_stream_]->time_base);
+                    input_packet->pts = tmp_frame->pts;
+                    input_packet->pts_time =  tmp_frame->pts * av_q2d(av_format_ctx_->streams[video_stream_]->time_base);
                     input_packet->idx = video_idx-offset_;
                     input_packet->data_size = data_size;
                     input_packet->data = move(data);
@@ -188,7 +261,10 @@ void InputProcessor::run() {
                     // double all_fps = ((double)video_idx/delta) * 1000.0;
                     // spdlog::debug("Input FPS: {} All FPS: {}", video_fps, all_fps);
                 }
+
                 ++video_idx;
+                av_frame_free(&sw_frame);
+                sw_frame = nullptr;
             }
         } else if (packet->stream_index == audio_stream_) {
             AVPacket* audio_packet = av_packet_alloc();
@@ -232,6 +308,7 @@ void InputProcessor::run() {
 
     // Close the video file
     avformat_close_input(&av_format_ctx_);
+    av_buffer_unref(&hw_device_ctx_);
 
     running_ = false;
     done_ = true;
