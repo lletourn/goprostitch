@@ -27,7 +27,7 @@ unique_ptr<LeftRightPacket> InputSyncer::next_pair() {
         left_packet_ = left_queue_.pop(wait_period);
     }
 
-    if(!right_packet_) {
+    if(left_packet_ && !right_packet_) {
         right_packet_ = right_queue_.pop(wait_period);
     }
 
