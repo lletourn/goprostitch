@@ -70,9 +70,9 @@ int main(int argc, const char ** argv) {
     spdlog::info("Loading file: {}", right_filename);
 
     const uint32_t input_queue_size = 2;
-    InputProcessor left_processor(left_filename, left_offset, input_queue_size);
+    InputProcessor left_processor(left_filename, false, left_offset, input_queue_size);
     left_processor.initialize();
-    InputProcessor right_processor(right_filename, right_offset, input_queue_size);
+    InputProcessor right_processor(right_filename, false, right_offset, input_queue_size);
     right_processor.initialize();
 
     spdlog::info("Left duratiaon: {}", left_processor.duration());

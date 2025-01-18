@@ -47,9 +47,9 @@ void process_videos(
     spdlog::info("Loading file: {}", right_filename);
 
     const uint32_t input_queue_size = nb_stitch_workers;
-    InputProcessor left_processor(left_filename, left_video_offset, input_queue_size);
+    InputProcessor left_processor(left_filename, false, left_video_offset, input_queue_size);
     left_processor.initialize();
-    InputProcessor right_processor(right_filename, right_video_offset, input_queue_size);
+    InputProcessor right_processor(right_filename, false, right_video_offset, input_queue_size);
     right_processor.initialize();
 
     InputSyncer input_syncer(left_processor.getOutVideoQueue(), right_processor.getOutVideoQueue());
