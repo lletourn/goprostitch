@@ -13,6 +13,7 @@ from typing import Any
 from typing import Dict
 from typing import List
 from typing import Optional
+from typing import Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -88,11 +89,13 @@ def parse_boxscore(game_id: int) -> Game:
     if tz_aware_date is None:
         raise ValueError("Missing game scheduled time")
     game = Game(scheduled_time=tz_aware_date, venue=venue, home_team_name=home_team_name, away_team_name=away_team_name, home_players=home_players, away_players=away_players)
+
     return game
 
 
-def build_request(game: Game, game_start: int, game_end: int, left_goalie_team: str) -> Dict[str, Any]:
-    game_request: Dict[str, Any] = {"requestType": "processGame", "requestDetails": {"surfaceRefId": {"surfaceRefId": game.venue}}}
+def build_request(game: Game, game_start: int, game_end: int, left_goalie_team: str) -> Tuple[Dict[str, Any], List[Dict[str, Any]]]:
+    players: List[Dict[str, Any]] = list()
+    game_request: Dict[str, Any] = {"requestType": "processGame", "requestDetails": {"surface": {"surfaceRefId": game.venue}}}
 
     game_request["requestDetails"]["media"] = [{"mediaRefId": "A", "url": "https://slextractedclips.s3.amazonaws.com/"}]
     game_request["requestDetails"]["game"] = {"gameRefId": f"LHDRS_{game.scheduled_time}", "scheduledTime": f"{game.scheduled_time.astimezone(pytz.utc).isoformat()}"}
@@ -104,14 +107,23 @@ def build_request(game: Game, game_start: int, game_end: int, left_goalie_team: 
     game_request["requestDetails"]["timestamps"].append({"mediaRefId": "A", "videoTimeMS": float(game_start) * 1000.0, "type": "gameStart", "period": 1, "leftSideGoalTeam": left_goalie_team})
     game_request["requestDetails"]["timestamps"].append({"mediaRefId": "A", "videoTimeMS": float(game_end) * 1000.0, "type": "gameEnd", "period": 3, "leftSideGoalTeam": left_goalie_team})
 
-    game_request["requestDetails"]["rosters"] = [{"teamRefId": game.home_team_name, "players": []}, {"teamRefId": game.away_team_name, "players": []}]
+    game_request["requestDetails"]["rosters"] = {"teams": [{"teamRefId": game.home_team_name, "players": []}, {"teamRefId": game.away_team_name, "players": []}]}
+
+    if left_goalie_team == 'home':
+        home_goalie_side = 'left'
+        away_goalie_side = 'right'
+    else:
+        home_goalie_side = 'right'
+        away_goalie_side = 'left'
 
     for player in game.home_players:
-        game_request["requestDetails"]["rosters"][0]["players"].append({"jerseyNum": player.jersey, "firstName": player.first_name, "lastName": player.last_name})
+        game_request["requestDetails"]["rosters"]["teams"][0]["players"].append({"playerRefId": f"H{player.jersey}", "jerseyNum": player.jersey, "firstName": player.first_name, "lastName": player.last_name})
+        players.append({"team_name": game.home_team_name, "teamid_label": 1, "team_goal_side": home_goalie_side, "first_name": player.first_name, "last_name": player.last_name, "jersey_number": int(player.jersey)})
     for player in game.away_players:
-        game_request["requestDetails"]["rosters"][1]["players"].append({"jerseyNum": player.jersey, "firstName": player.first_name, "lastName": player.last_name})
+        game_request["requestDetails"]["rosters"]["teams"][1]["players"].append({"playerRefId": f"A{player.jersey}", "jerseyNum": player.jersey, "firstName": player.first_name, "lastName": player.last_name})
+        players.append({"team_name": game.away_team_name, "teamid_label": 2, "team_goal_side": away_goalie_side, "first_name": player.first_name, "last_name": player.last_name, "jersey_number": int(player.jersey)})
 
-    return game_request
+    return game_request, players
 
 
 def main() -> None:
@@ -120,7 +132,8 @@ def main() -> None:
     parser.add_argument('--goalieonleft', required=True, type=str, choices=["home", "away"], help='Which teams goalie is on left at faceoff')
     parser.add_argument('--faceofftime', required=True, type=int, help='Video timestamp of the 1st faceoff. In seconds')
     parser.add_argument('--whistletime', required=True, type=int, help='Video timestamp of the last whistle. In seconds')
-    parser.add_argument('--output', required=True, type=str, help='JSON output filename')
+    parser.add_argument('--outrequest', required=True, type=str, help='JSON output filename')
+    parser.add_argument('--outplayers', required=True, type=str, help='JSON player details output')
     parser.add_argument("-l", "--log", help="log level (default: info)", choices=["debug", "info", "warning", "error", "critical"], default="info")
     args = parser.parse_args()
 
@@ -131,10 +144,15 @@ def main() -> None:
     game_id = args.gameid
     game = parse_boxscore(game_id)
 
-    game_request = build_request(game, args.faceofftime, args.whistletime, args.goalieonleft)
+    game_request, player_details = build_request(game, args.faceofftime, args.whistletime, args.goalieonleft)
 
-    with open(args.output, "w", encoding='utf8') as f:
+    with open(args.outrequest, "w", encoding='utf8') as f:
         json.dump(game_request, f, indent=4, ensure_ascii=False)
+
+    with open(args.outplayers, "w", encoding='utf8') as f:
+        for player in player_details:
+            data = json.dumps(player, ensure_ascii=False)
+            print(data, file=f)
 
 
 if __name__ == '__main__':
