@@ -17,6 +17,7 @@ using namespace std;
 
 OutputEncoder::OutputEncoder(
     const string& filename,
+    bool use_gpu,
     ThreadSafeQueue<AVPacket, PacketDeleter>& left_audio_queue,
     ThreadSafeQueue<AVPacket, PacketDeleter>& right_audio_queue,
     uint32_t width,
@@ -24,17 +25,22 @@ OutputEncoder::OutputEncoder(
     bool use_left_audio,
     Rational video_time_base,
     Rational video_frame_rate,
+    const AVColorSpace& colorspace,
+    const AVColorRange& color_range,
     Rational audio_time_base,
     uint32_t queue_size,
     uint32_t nb_threads)
 : filename_(filename),
+  use_gpu_(use_gpu),
   use_left_audio_(use_left_audio),
   running_(false),
   done_(false),
   video_width_(width),
   video_height_(height),
-  video_time_base_(video_time_base),
-  video_frame_rate_(video_frame_rate),
+  video_time_base_((AVRational){(int)video_time_base.num, (int)video_time_base.den}),
+  video_frame_rate_((AVRational){(int)video_frame_rate.num, (int)video_frame_rate.den}),
+  colorspace_(colorspace),
+  color_range_(color_range),
   left_audio_packet_queue_(left_audio_queue),
   right_audio_packet_queue_(right_audio_queue),
   panoramic_packet_queue_(queue_size),
@@ -108,52 +114,84 @@ void OutputEncoder::init_video() {
         throw runtime_error("Could not allocate video stream");
     }
 
-    video_codec_ = avcodec_find_encoder(AV_CODEC_ID_HEVC);
-    //video_codec_ = avcodec_find_encoder(AV_CODEC_ID_H264);
-    if (!video_codec_) {
-        spdlog::error("Video codec not found");
-        throw runtime_error("Video codec not found");
-    }
-  
-    video_codec_ctx_ = avcodec_alloc_context3(video_codec_);
-    if (!video_codec_ctx_) {
-        spdlog::error("Could not allocate video codec context");
-        throw runtime_error("Could not allocate video codec context");
-    }
-
-    AVRational fr = av_make_q(video_frame_rate_.num, video_frame_rate_.den);
-    double fr_dbl = av_q2d(fr);
+    double fr_dbl = av_q2d(video_frame_rate_);
     uint32_t gop = (uint32_t) (round(fr_dbl / 10.0) * 100.0); // 59.94 would be 599.4, we want 600.)
-    string preset = "slow";
 
-    AVDictionary *opt=NULL;
-    // video_codec_ctx_->thread_count = 1; // x264
-    stringstream pool_ss;
-    pool_ss << "pools=" << pool_size_;
-    av_dict_set(&opt, "x265-params", pool_ss.str().c_str(), 0);
-    av_dict_set(&opt, "crf", "24", 0);
-    av_dict_set(&opt, "preset", preset.c_str(), 0);
-    av_dict_set(&opt, "keyint", to_string(gop).c_str(), 0);
+    AVDictionary* opt = NULL;
+    if (use_gpu_) {
+        video_codec_ = avcodec_find_encoder_by_name("hevc_nvenc");
+        if (!video_codec_) {
+            spdlog::error("Video codec not found");
+            throw runtime_error("Video codec not found");
+        }
 
+        video_codec_ctx_ = avcodec_alloc_context3(video_codec_);
+        if (!video_codec_ctx_) {
+            spdlog::error("Could not allocate video codec context");
+            throw runtime_error("Could not allocate video codec context");
+        }
+
+
+
+        video_codec_ctx_->rc_max_rate = 11*104*10224;
+        video_codec_ctx_->max_b_frames = 3;
+        // video_codec_ctx_->profile = NV_ENC_PROFILE_HEVC_MAIN;  NOT ACCESSIBLE PUBLICALY. Use codec priv_data
+        // video_codec_ctx_->level = NV_ENC_LEVEL_HEVC_51; NOT ACCESSIBLE PUBLICALY. Use codec priv_data
+        video_codec_ctx_->qmin = 24;
+        video_codec_ctx_->qmax = 51;
+        video_codec_ctx_->rc_buffer_size = 20*1024*104;
+        av_opt_set(video_codec_ctx_->priv_data, "preset", "p5", 0);
+        av_opt_set(video_codec_ctx_->priv_data, "profile", "main", 0);
+        av_opt_set(video_codec_ctx_->priv_data, "level", "5.1", 0);
+        av_opt_set(video_codec_ctx_->priv_data, "rc", "vbr", 0);
+        av_opt_set(video_codec_ctx_->priv_data, "b_ref_mode", "each", 0);
+        av_opt_set(video_codec_ctx_->priv_data, "cq", "24", 0);
+        av_opt_set(video_codec_ctx_->priv_data, "spatial-aq", "1", 0);
+        // av_opt_set(video_codec_ctx_->priv_data, "rc-lookahead", "20", 0);
+    } else {
+        video_codec_ = avcodec_find_encoder(AV_CODEC_ID_HEVC);
+        //video_codec_ = avcodec_find_encoder(AV_CODEC_ID_H264);
+        if (!video_codec_) {
+            spdlog::error("Video codec not found");
+            throw runtime_error("Video codec not found");
+        }
+
+        video_codec_ctx_ = avcodec_alloc_context3(video_codec_);
+        if (!video_codec_ctx_) {
+            spdlog::error("Could not allocate video codec context");
+            throw runtime_error("Could not allocate video codec context");
+        }
+
+        string preset = "slow";
+
+        // video_codec_ctx_->thread_count = 1; // x264
+        stringstream pool_ss;
+        pool_ss << "pools=" << pool_size_;
+        av_dict_set(&opt, "x265-params", pool_ss.str().c_str(), 0);
+        av_dict_set(&opt, "crf", "24", 0);
+        av_dict_set(&opt, "preset", preset.c_str(), 0);
+        av_dict_set(&opt, "keyint", to_string(gop).c_str(), 0);
+
+        av_opt_set(video_codec_ctx_->priv_data, "preset", preset.c_str(), 0);
+        av_opt_set(video_codec_ctx_->priv_data, "crf", "24", 0);
+        video_codec_ctx_->thread_type = FF_THREAD_FRAME;
+        video_codec_ctx_->thread_count = 1;
+    }
+
+    video_codec_ctx_->codec_id = video_codec_->id;
     video_codec_ctx_->pix_fmt = AV_PIX_FMT_YUV420P;
-    AVRational tb;
-    tb.num = video_time_base_.num;
-    tb.den = video_time_base_.den;
-    video_codec_ctx_->time_base = tb;
+    video_stream_->time_base = video_time_base_;
+    video_codec_ctx_->time_base = (AVRational){video_frame_rate_.den, video_frame_rate_.num};
+    video_codec_ctx_->framerate = video_frame_rate_;
+    video_codec_ctx_->height = video_height_;
+    video_codec_ctx_->width = video_width_;
+    video_codec_ctx_->colorspace = colorspace_;
+    video_codec_ctx_->color_range = color_range_;
     video_codec_ctx_->gop_size = gop;
-    video_codec_ctx_->framerate = fr;
-    av_opt_set(video_codec_ctx_->priv_data, "preset", preset.c_str(), 0);
-    av_opt_set(video_codec_ctx_->priv_data, "crf", "24", 0);
-    video_codec_ctx_->thread_type = FF_THREAD_FRAME;
-    video_codec_ctx_->thread_count = 1;
-
 
     if (av_format_ctx_->oformat->flags & AVFMT_GLOBALHEADER) {
         video_codec_ctx_->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
     }
-
-    video_codec_ctx_->height = video_height_;
-    video_codec_ctx_->width = video_width_;
 
     int32_t ret = avcodec_open2(video_codec_ctx_, video_codec_, &opt);
     if (ret < 0) {
@@ -166,7 +204,7 @@ void OutputEncoder::init_video() {
         throw runtime_error("Failed to copy video encoder parameters to output stream");;
     }
   
-    video_stream_->time_base = video_codec_ctx_->time_base;
+    // video_stream_->time_base = video_codec_ctx_->time_base;
     video_stream_->avg_frame_rate = video_codec_ctx_->framerate;
     if(spdlog::should_log(spdlog::level::debug))
         av_dump_format(av_format_ctx_, 0, filename_.c_str(), 1);
@@ -276,7 +314,6 @@ void OutputEncoder::run() {
         while(video_packets.find(frame_idx) != video_packets.end()) {
             unique_ptr<PanoramicPacket> current_panoramic_packet(move(video_packets[frame_idx]));
             video_packets.erase(frame_idx);
-            ++frame_idx;
 
             //raise(SIGINT);
             while(!left_audio_packets_.empty() && (left_audio_packets_.front()->pts * av_q2d(left_audio_stream_->time_base)) <= current_panoramic_packet->pts_time) {
@@ -301,7 +338,15 @@ void OutputEncoder::run() {
                 throw runtime_error("Error making video frame writable");
             }
 
-            video_frame_->pts = current_panoramic_packet->pts;
+            video_frame_->pts = frame_idx;
+            video_frame_->time_base = (AVRational){video_frame_rate_.den, video_frame_rate_.num};
+            video_frame_->duration = 1;
+            spdlog::debug("Frame PTS: %ld timebase: %d/%d  Duration: %ld", video_frame_->pts, video_frame_->time_base.num, video_frame_->time_base.den, video_frame_->duration);
+            spdlog::debug("Codec Framerate: %d/%d timebase: %d/%d", video_codec_ctx_->framerate.num, video_codec_ctx_->framerate.den, video_codec_ctx_->time_base.num, video_codec_ctx_->time_base.den);
+            spdlog::debug("Stream Framerate: %d/%d", video_stream_->time_base.num, video_stream_->time_base.den);
+
+            // video_frame_->pts = frame_idx;
+            ++frame_idx;
             ret = av_image_fill_arrays(video_frame_->data, video_frame_->linesize, current_panoramic_packet->data.get(), video_codec_ctx_->pix_fmt, video_frame_->width, video_frame_->height, 1);
             if (ret < 0) {
                 spdlog::error("Error filling image array");
@@ -321,6 +366,9 @@ void OutputEncoder::run() {
                     spdlog::error("Error during encoding");
                     throw runtime_error("Error during encoding");
                 }
+                video_pkt->time_base = video_codec_ctx_->time_base;
+                av_packet_rescale_ts(video_pkt, video_codec_ctx_->time_base, video_stream_->time_base);
+                video_pkt->time_base = video_stream_->time_base;
                 video_pkt->stream_index = video_stream_->index;
                 ret = av_interleaved_write_frame(av_format_ctx_, video_pkt);
                 if (ret < 0) {
@@ -335,7 +383,7 @@ void OutputEncoder::run() {
             double delta = chrono::duration_cast<chrono::milliseconds>(chrono::steady_clock::now() - start).count();
             if((delta - prev_delta) > 60000.0) {
                 prev_delta = delta;
-                double current_duration = (double)video_frame_->pts * av_q2d(video_stream_->time_base);
+                double current_duration = (double)video_frame_->pts * av_q2d(video_frame_->time_base);
 
                 double pct_done = current_duration * 100.0 / (double)total_duration_;
                 double fps = ((double)frame_idx/delta) * 1000.0; 
@@ -362,6 +410,7 @@ void OutputEncoder::run() {
             throw runtime_error("Error during encoding");
         }
         video_pkt->stream_index = video_stream_->index;
+        av_packet_rescale_ts(video_pkt, video_codec_ctx_->time_base, video_stream_->time_base);
         ret = av_interleaved_write_frame(av_format_ctx_, video_pkt);
         if (ret < 0) {
             spdlog::error("Couldn't mux packet");

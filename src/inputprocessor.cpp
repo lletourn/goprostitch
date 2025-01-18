@@ -99,15 +99,14 @@ void InputProcessor::initialize() {
         throw runtime_error("Unsupported video codec");
     }
 
-    video_codec_ctx_orig_ = avcodec_alloc_context3(video_codec_);
-    ret = avcodec_parameters_to_context(video_codec_ctx_orig_, av_format_ctx_->streams[video_stream_]->codecpar);
-
     video_codec_ctx_ = avcodec_alloc_context3(video_codec_);
     ret = avcodec_parameters_to_context(video_codec_ctx_, av_format_ctx_->streams[video_stream_]->codecpar);
     if (ret != 0) {
         spdlog::error("Could not copy video codec context.");
         throw runtime_error("Error occured");
     }
+    colorspace_ = video_codec_ctx_->colorspace;
+    color_range_ = video_codec_ctx_->color_range;
     video_frame_rate_ = Rational(av_format_ctx_->streams[video_stream_]->r_frame_rate.num, av_format_ctx_->streams[video_stream_]->r_frame_rate.den);
     video_codec_ctx_->thread_type = FF_THREAD_FRAME;
     video_codec_ctx_->thread_count = 1;
@@ -230,7 +229,6 @@ void InputProcessor::run() {
 
     // Close the codecs
     avcodec_free_context(&video_codec_ctx_);
-    avcodec_free_context(&video_codec_ctx_orig_);
 
     // Close the video file
     avformat_close_input(&av_format_ctx_);

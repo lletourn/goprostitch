@@ -14,7 +14,7 @@ extern "C" {
 
 class OutputEncoder {
  public:
-    OutputEncoder(const std::string& filename, ThreadSafeQueue<AVPacket, PacketDeleter>& left_audio_queue, ThreadSafeQueue<AVPacket, PacketDeleter>& right_audio_queue, uint32_t width, uint32_t height, bool use_left_audio, Rational video_time_base, Rational video_frame_rate, Rational audio_time_base, uint32_t queue_size, uint32_t nb_threads);
+    OutputEncoder(const std::string& filename, bool use_gpu, ThreadSafeQueue<AVPacket, PacketDeleter>& left_audio_queue, ThreadSafeQueue<AVPacket, PacketDeleter>& right_audio_queue, uint32_t width, uint32_t height, bool use_left_audio, Rational video_time_base, Rational video_frame_rate, const AVColorSpace& colorspace, const AVColorRange& color_range, Rational audio_time_base, uint32_t queue_size, uint32_t nb_threads);
     ~OutputEncoder();
 
     void initialize(const AVCodecParameters* left_audio_codec_parameters, const AVCodecParameters* right_audio_codec_parameters, double total_duration);
@@ -25,8 +25,6 @@ class OutputEncoder {
 
     ThreadSafeQueue<PanoramicPacket>& getInPanoramicQueue();
 
-    void close();
-
  private:
     AVStream* init_audio(const AVCodecParameters* audio_codec_parameters, const char* title);
     void init_video();
@@ -34,13 +32,16 @@ class OutputEncoder {
 
  private:
     const std::string filename_;
+    bool use_gpu_;
     bool use_left_audio_;
     bool running_;
     std::atomic<bool> done_;
     uint32_t video_width_;
     uint32_t video_height_;
-    Rational video_time_base_;
-    Rational video_frame_rate_;
+    AVRational video_time_base_;
+    AVRational video_frame_rate_;
+    AVColorSpace colorspace_;
+    AVColorRange color_range_;
     uint32_t pool_size_;
 
     ThreadSafeQueue<AVPacket, PacketDeleter>& left_audio_packet_queue_;

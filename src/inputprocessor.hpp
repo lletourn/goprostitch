@@ -28,6 +28,8 @@ class InputProcessor {
     Rational video_time_base() {return video_time_base_;};
     Rational video_frame_rate() {return video_frame_rate_;};
     Rational audio_time_base() {return audio_time_base_;};
+    AVColorSpace colorspace() {return colorspace_;};
+    AVColorRange color_range() {return color_range_;};
     double duration() {return duration_;};
     // Pointer is owned by this class
     const AVCodecParameters* audio_codec_parameters() {return av_format_ctx_->streams[audio_stream_]->codecpar;};
@@ -46,6 +48,8 @@ class InputProcessor {
     Rational video_time_base_;
     Rational video_frame_rate_;
     Rational audio_time_base_;
+    AVColorSpace colorspace_;
+    AVColorRange color_range_;
     double duration_;
 
     ThreadSafeQueue<VideoPacket> video_packet_queue_;
@@ -53,7 +57,6 @@ class InputProcessor {
     std::thread thread_;
 
     AVFormatContext* av_format_ctx_;
-    AVCodecContext* video_codec_ctx_orig_;
     AVCodecContext* video_codec_ctx_;
     const AVCodec* video_codec_;
     int video_stream_;

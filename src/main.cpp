@@ -16,6 +16,7 @@ using namespace std;
 using namespace cv;
 
 void process_videos(
+    const bool use_gpu,
     const string& left_filename,
     const string& right_filename,
     const string& output_filename,
@@ -25,6 +26,7 @@ void process_videos(
     const string& camera_intrinsics_filename,
     const uint16_t nb_stitch_workers,
     const uint16_t nb_encoding_threads,
+    const double eta_refresh_rate,
     const bool fix_exposure
 ) {
 
@@ -69,7 +71,7 @@ void process_videos(
     ThreadSafeQueue<LeftRightPacket> stitcher_queue(input_queue_size);
 
     spdlog::info("Writting file: {}", output_filename);
-    OutputEncoder output_encoder(output_filename, left_processor.getOutAudioQueue(), right_processor.getOutAudioQueue(), pano_width, pano_height, use_left_audio, left_processor.video_time_base(), left_processor.video_frame_rate(), left_processor.audio_time_base(), input_queue_size, nb_encoding_threads);
+    OutputEncoder output_encoder(output_filename, use_gpu, left_processor.getOutAudioQueue(), right_processor.getOutAudioQueue(), pano_width, pano_height, use_left_audio, left_processor.video_time_base(), left_processor.video_frame_rate(), left_processor.colorspace(), left_processor.color_range(), left_processor.audio_time_base(), input_queue_size, nb_encoding_threads);
     output_encoder.initialize(left_processor.audio_codec_parameters(), right_processor.audio_codec_parameters(), duration);
 
     // Start IO Threads
@@ -116,13 +118,17 @@ void process_videos(
             double delta = chrono::duration_cast<chrono::milliseconds>(chrono::steady_clock::now() - start).count();
             // double fps = ((double)idx_to_process/delta) * 1000.0;
 
-            if((delta - prev_delta) > 60000.0) {
+            if(prev_delta == 0 || (delta - prev_delta) > eta_refresh_rate) {
                 prev_delta = delta;
-                spdlog::info("L: {} R: {} S: {} oP:{}", 
+                spdlog::info("L: {}/{} R: {}/{} S: {}/{} oP:{}/{}", 
                                 left_processor.getOutVideoQueue().estimated_size(),
+                                left_processor.getOutVideoQueue().max_size(),
                                 right_processor.getOutVideoQueue().estimated_size(),
+                                right_processor.getOutVideoQueue().max_size(),
                                 stitcher_queue.estimated_size(),
-                                output_encoder.getInPanoramicQueue().estimated_size());
+                                stitcher_queue.max_size(),
+                                output_encoder.getInPanoramicQueue().estimated_size(),
+                                output_encoder.getInPanoramicQueue().max_size());
             }
         } else {
             if(left_processor.is_done() || right_processor.is_done()) {
@@ -163,6 +169,7 @@ int main(int argc, const char ** argv) {
 
     const String keys =
         "{help h usage ? | | print this message }"
+        "{usegpu | false | Use NVIDIA GPU to encode }"
         "{left |<none>| Left video }"
         "{right |<none>| Right video }"
         "{leftoffset | 0 | Left video frame offset.}"
@@ -173,6 +180,7 @@ int main(int argc, const char ** argv) {
         "{stitchthreads | 1 | Nb of stitching threads. There are 2 threads by default for video reading. }"
         "{encthreads | 1 | Nb of encoding threads. There are 2 threads by default for video reading. }"
         "{fixexposure | false | Fix whitebalance between cameras }"
+        "{etarefreshrate | 60000 | Refreshrate of ETA in ms }"
     ;
     CommandLineParser parser(argc, argv, keys);
     parser.about("Seam finder");
@@ -181,6 +189,7 @@ int main(int argc, const char ** argv) {
         parser.printMessage();
         return 0;
     }
+    bool use_gpu(parser.get<bool>("usegpu"));
     string left_filename(parser.get<string>("left"));
     string right_filename(parser.get<string>("right"));
     string output_filename(parser.get<string>("output"));
@@ -191,7 +200,9 @@ int main(int argc, const char ** argv) {
     uint16_t nb_stitch_workers(parser.get<uint32_t>("stitchthreads"));
     uint16_t nb_encoding_threads(parser.get<uint32_t>("encthreads"));
     bool fix_exposure(parser.get<bool>("fixexposure"));
+    double eta_refresh_rate(parser.get<double>("etarefreshrate"));
 
-    process_videos(left_filename, right_filename, output_filename, left_video_offset, right_video_offset, camera_params_filename, camera_intrinsics_filename, nb_stitch_workers, nb_encoding_threads, fix_exposure);
+    cout << "WTF: " << eta_refresh_rate << endl;
+    process_videos(use_gpu, left_filename, right_filename, output_filename, left_video_offset, right_video_offset, camera_params_filename, camera_intrinsics_filename, nb_stitch_workers, nb_encoding_threads, eta_refresh_rate, fix_exposure);
     spdlog::info("Done");
 }
