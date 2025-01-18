@@ -6,6 +6,7 @@ add_compile_options("-fstack-protector-all")
 find_package(spdlog REQUIRED)
 find_package(RapidJSON REQUIRED)
 find_package(PkgConfig REQUIRED)
+pkg_check_modules(FFNVCODEC REQUIRED IMPORTED_TARGET ffnvcodec)
 pkg_check_modules(LIBAV REQUIRED IMPORTED_TARGET
     libavdevice
     libavfilter
@@ -19,10 +20,15 @@ find_package(OpenCV REQUIRED)
 
 include_directories(${CMAKE_SOURCE_DIR}/src)
 include_directories(${OpenCV_INCLUDE_DIRS})
+include_directories(${FFNVCODEC_INCLUDE_DIRS})
 
 add_executable(${PROJECT_NAME} ${CMAKE_SOURCE_DIR}/src/main.cpp ${CMAKE_SOURCE_DIR}/src/framestitcher.cpp ${CMAKE_SOURCE_DIR}/src/compositing.cpp ${CMAKE_SOURCE_DIR}/src/inputprocessor.cpp ${CMAKE_SOURCE_DIR}/src/inputsyncer.cpp ${CMAKE_SOURCE_DIR}/src/outputencoder.cpp ${CMAKE_SOURCE_DIR}/src/readers.cpp)
 set_property(TARGET ${PROJECT_NAME} PROPERTY CXX_STANDARD 17)
-target_link_libraries(${PROJECT_NAME} PRIVATE PkgConfig::LIBAV ${OpenCV_LIBS} spdlog::spdlog)
+target_link_libraries(${PROJECT_NAME} PRIVATE PkgConfig::LIBAV PkgConfig::FFNVCODEC ${OpenCV_LIBS} spdlog::spdlog)
+
+add_executable(gputst ${CMAKE_SOURCE_DIR}/src/gputst.cpp)
+set_property(TARGET gputst PROPERTY CXX_STANDARD 17)
+target_link_libraries(gputst PRIVATE PkgConfig::LIBAV PkgConfig::FFNVCODEC ${OpenCV_LIBS} spdlog::spdlog)
 
 add_executable(memtst ${CMAKE_SOURCE_DIR}/src/memtst.cpp ${CMAKE_SOURCE_DIR}/src/framestitcher.cpp ${CMAKE_SOURCE_DIR}/src/compositing.cpp ${CMAKE_SOURCE_DIR}/src/inputprocessor.cpp ${CMAKE_SOURCE_DIR}/src/inputsyncer.cpp ${CMAKE_SOURCE_DIR}/src/readers.cpp)
 set_property(TARGET memtst PROPERTY CXX_STANDARD 17)
