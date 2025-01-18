@@ -47,6 +47,10 @@ template<class T, class Deleter = std::default_delete<T>> class ThreadSafeQueue 
         return (uint64_t)q_.size();
     }
 
+    uint64_t max_size() {
+        return max_size_;
+    }
+
     uint64_t estimated_size() {
         return (uint64_t)q_.size();
     }
