@@ -27,6 +27,7 @@ void process_videos(
     const uint16_t nb_stitch_workers,
     const uint16_t nb_encoding_threads,
     const double eta_refresh_rate,
+    const int32_t encode_duration,
     const bool fix_exposure
 ) {
 
@@ -55,9 +56,9 @@ void process_videos(
     spdlog::info("Loading file: {}", right_filename);
 
     const uint32_t input_queue_size = nb_stitch_workers;
-    InputProcessor left_processor(left_filename, left_video_offset, input_queue_size);
+    InputProcessor left_processor(left_filename, use_gpu, left_video_offset, input_queue_size);
     left_processor.initialize();
-    InputProcessor right_processor(right_filename, right_video_offset, input_queue_size);
+    InputProcessor right_processor(right_filename, use_gpu, right_video_offset, input_queue_size);
     right_processor.initialize();
 
     InputSyncer input_syncer(left_processor.getOutVideoQueue(), right_processor.getOutVideoQueue());
@@ -107,11 +108,15 @@ void process_videos(
     spdlog::info("Processing all frames");
     chrono::steady_clock::time_point start = chrono::steady_clock::now();
     double prev_delta = 0;
+    uint32_t fps_frame_counter = 0;
+    int32_t stop_at = 0;
     while(true) {
         bool read_packet = false;
 
         unique_ptr<LeftRightPacket> lr_packet(input_syncer.next_pair());
         if(lr_packet) {
+            ++stop_at;
+            ++fps_frame_counter;
             read_packet = true;
             stitcher_queue.push(move(lr_packet));
 
@@ -119,8 +124,10 @@ void process_videos(
             // double fps = ((double)idx_to_process/delta) * 1000.0;
 
             if(prev_delta == 0 || (delta - prev_delta) > eta_refresh_rate) {
+                double fps = (double)fps_frame_counter / ((delta - prev_delta) / 1000.0);
+                fps_frame_counter = 0;
                 prev_delta = delta;
-                spdlog::info("L: {}/{} R: {}/{} S: {}/{} oP:{}/{}", 
+                spdlog::info("L: {}/{} R: {}/{} S: {}/{} oP:{}/{} FPS: {:.2f}",
                                 left_processor.getOutVideoQueue().estimated_size(),
                                 left_processor.getOutVideoQueue().max_size(),
                                 right_processor.getOutVideoQueue().estimated_size(),
@@ -128,8 +135,12 @@ void process_videos(
                                 stitcher_queue.estimated_size(),
                                 stitcher_queue.max_size(),
                                 output_encoder.getInPanoramicQueue().estimated_size(),
-                                output_encoder.getInPanoramicQueue().max_size());
+                                output_encoder.getInPanoramicQueue().max_size(),
+                                fps);
             }
+
+            if (encode_duration > 0 && stop_at >= (encode_duration * 60))
+                break;
         } else {
             if(left_processor.is_done() || right_processor.is_done()) {
                 input_syncer.set_reader_done();
@@ -181,6 +192,7 @@ int main(int argc, const char ** argv) {
         "{encthreads | 1 | Nb of encoding threads. There are 2 threads by default for video reading. }"
         "{fixexposure | false | Fix whitebalance between cameras }"
         "{etarefreshrate | 60000 | Refreshrate of ETA in ms }"
+        "{duration | -1 | Encode for this duration. -1 encode all of it (default) }"
     ;
     CommandLineParser parser(argc, argv, keys);
     parser.about("Seam finder");
@@ -201,8 +213,9 @@ int main(int argc, const char ** argv) {
     uint16_t nb_encoding_threads(parser.get<uint32_t>("encthreads"));
     bool fix_exposure(parser.get<bool>("fixexposure"));
     double eta_refresh_rate(parser.get<double>("etarefreshrate"));
+    int32_t duration(parser.get<int32_t>("duration"));
 
     cout << "WTF: " << eta_refresh_rate << endl;
-    process_videos(use_gpu, left_filename, right_filename, output_filename, left_video_offset, right_video_offset, camera_params_filename, camera_intrinsics_filename, nb_stitch_workers, nb_encoding_threads, eta_refresh_rate, fix_exposure);
+    process_videos(use_gpu, left_filename, right_filename, output_filename, left_video_offset, right_video_offset, camera_params_filename, camera_intrinsics_filename, nb_stitch_workers, nb_encoding_threads, eta_refresh_rate, duration, fix_exposure);
     spdlog::info("Done");
 }

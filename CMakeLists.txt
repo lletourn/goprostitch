@@ -26,9 +26,13 @@ add_executable(${PROJECT_NAME} ${CMAKE_SOURCE_DIR}/src/main.cpp ${CMAKE_SOURCE_D
 set_property(TARGET ${PROJECT_NAME} PROPERTY CXX_STANDARD 17)
 target_link_libraries(${PROJECT_NAME} PRIVATE PkgConfig::LIBAV PkgConfig::FFNVCODEC ${OpenCV_LIBS} spdlog::spdlog)
 
-add_executable(gputst ${CMAKE_SOURCE_DIR}/src/gputst.cpp)
-set_property(TARGET gputst PROPERTY CXX_STANDARD 17)
-target_link_libraries(gputst PRIVATE PkgConfig::LIBAV PkgConfig::FFNVCODEC ${OpenCV_LIBS} spdlog::spdlog)
+add_executable(gpuenctst ${CMAKE_SOURCE_DIR}/src/gpuenctst.cpp)
+set_property(TARGET gpuenctst PROPERTY CXX_STANDARD 17)
+target_link_libraries(gpuenctst PRIVATE PkgConfig::LIBAV PkgConfig::FFNVCODEC ${OpenCV_LIBS} spdlog::spdlog)
+
+add_executable(gpudectst ${CMAKE_SOURCE_DIR}/src/gpudectst.cpp ${CMAKE_SOURCE_DIR}/src/inputprocessor.cpp)
+set_property(TARGET gpudectst PROPERTY CXX_STANDARD 17)
+target_link_libraries(gpudectst PRIVATE PkgConfig::LIBAV PkgConfig::FFNVCODEC ${OpenCV_LIBS} spdlog::spdlog)
 
 add_executable(memtst ${CMAKE_SOURCE_DIR}/src/memtst.cpp ${CMAKE_SOURCE_DIR}/src/framestitcher.cpp ${CMAKE_SOURCE_DIR}/src/compositing.cpp ${CMAKE_SOURCE_DIR}/src/inputprocessor.cpp ${CMAKE_SOURCE_DIR}/src/inputsyncer.cpp ${CMAKE_SOURCE_DIR}/src/readers.cpp)
 set_property(TARGET memtst PROPERTY CXX_STANDARD 17)

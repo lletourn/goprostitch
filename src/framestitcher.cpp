@@ -207,33 +207,51 @@ void FrameStitcher::run() {
     initUndistortRectifyMap(camera_intrinsic_K_, camera_intrinsic_distortion_coefficients_, Mat(), optimized_camera_matrix, calibration_image_size_,  CV_16SC2, map1, map2);
 
     vector<Size> image_sizes = {calibration_image_size_, calibration_image_size_};
-    ImageCompositing compositor(camera_params_, image_masks_, image_sizes);
+    ImageCompositing compositor(false, camera_params_, image_masks_, image_sizes);
 
     while(running_) {
+        spdlog::trace("Getting LR");
         unique_ptr<LeftRightPacket> left_right_packet(stitcher_queue_.pop(chrono::seconds(1)));
         if(left_right_packet) {
-            Mat left(left_right_packet->height * 3/2, left_right_packet->width, CV_8UC1, left_right_packet->left_data.get());
-            Mat right(left_right_packet->height * 3/2, left_right_packet->width, CV_8UC1, left_right_packet->right_data.get());
+            spdlog::trace("Create left/right");
+            Mat left(left_right_packet->height, left_right_packet->width, CV_8UC3, left_right_packet->left_data.get());
+            Mat right(left_right_packet->height, left_right_packet->width, CV_8UC3, left_right_packet->right_data.get());
+            // spdlog::trace("Got LR");
+            // Mat left(left_right_packet->height * 3/2, left_right_packet->width, CV_8UC1, left_right_packet->left_data.get());
+            // spdlog::trace("Created left");
+            // Mat right(left_right_packet->height * 3/2, left_right_packet->width, CV_8UC1, left_right_packet->right_data.get());
+            // spdlog::trace("Created right");
 
-            cvtColor(left, images[0], COLOR_YUV2BGR_I420);
-            cvtColor(right, images[1], COLOR_YUV2BGR_I420);
-            remap(images[0], images[0], map1, map2, INTER_LINEAR);
-            remap(images[1], images[1], map1, map2, INTER_LINEAR);
+            // cvtColor(left, images[0], COLOR_YUV2BGR_I420);
+            // cvtColor(right, images[1], COLOR_YUV2BGR_I420);
+            // remap(images[0], images[0], map1, map2, INTER_LINEAR);
+            // remap(images[1], images[1], map1, map2, INTER_LINEAR);
+            spdlog::trace("Remap left right");
+            remap(left, images[0], map1, map2, INTER_LINEAR);
+            remap(right, images[1], map1, map2, INTER_LINEAR);
+            spdlog::trace("Un distorted left right");
 
             if(match_histogram_)
                 MatchHistograms(images[1], reference_bgr_cumsum_, reference_bgr_value_idxs_);
 
+            spdlog::trace("Composing");
             compositor.compose(images, panoramic_image);
+            spdlog::trace("Composed");
 
             Mat cropped_image(panoramic_image, Range(crop_offset_y_, crop_offset_y_+crop_height_), Range(crop_offset_x_, crop_offset_x_+crop_width_));
+            spdlog::trace("Cropped pano");
 
             cvtColor(cropped_image, panoramic_image_yuv, COLOR_BGR2YUV_I420);
+            spdlog::trace("Converted to YUV NV12");
 
             unique_ptr<PanoramicPacket> pano_packet(new PanoramicPacket);
+            spdlog::trace("Created pano packet");
             pano_packet->data_size = panoramic_image_yuv.total() * panoramic_image_yuv.elemSize();
             pano_packet->data = unique_ptr<uint8_t[]>(new uint8_t[pano_packet->data_size]);
+            spdlog::trace("Created image buffer in packet");
 
             memcpy(pano_packet->data.get(), panoramic_image_yuv.data, pano_packet->data_size);
+            spdlog::trace("Copied data");
 
             // Don't use W H from YUV frame. Opencv rows cols represent data row col, not image row col. So it's wrong for sampled data like YUV4XX not 444.
             pano_packet->width = cropped_image.cols;
@@ -241,9 +259,12 @@ void FrameStitcher::run() {
             pano_packet->pts = left_right_packet->pts;
             pano_packet->pts_time = left_right_packet->pts_time;
             pano_packet->idx = left_right_packet->idx;
+            spdlog::trace("Assigned to packet");
             left_right_packet.reset();
+            spdlog::trace("cleared input left right packet");
 
             output_queue_.push(move(pano_packet));
+            spdlog::trace("Added pano to queue");
         }
     }
     done_ = true;

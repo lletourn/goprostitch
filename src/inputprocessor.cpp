@@ -11,7 +11,24 @@ extern "C" {
   #include <libswscale/swscale.h>
 }
 
+#include <opencv2/opencv.hpp>
 using namespace std;
+using namespace cv;
+
+string gen_random(const int len) {
+    static const char alphanum[] =
+        "0123456789"
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+        "abcdefghijklmnopqrstuvwxyz";
+    std::string tmp_s;
+    tmp_s.reserve(len);
+
+    for (int i = 0; i < len; ++i) {
+        tmp_s += alphanum[rand() % (sizeof(alphanum) - 1)];
+    }
+    
+    return tmp_s;
+}
 
 static AVPixelFormat hw_pix_fmt;
 static AVPixelFormat get_hw_format(AVCodecContext *ctx, const enum AVPixelFormat *pix_fmts) {
@@ -144,6 +161,11 @@ void InputProcessor::initialize() {
     spdlog::info("Using decoder codec: {}", video_codec_->name);
 
     video_codec_ctx_ = avcodec_alloc_context3(video_codec_);
+    if(!video_codec_ctx_) {
+        spdlog::error("Could not allocate video codec context.");
+        throw runtime_error("Error occured");
+    }
+
     ret = avcodec_parameters_to_context(video_codec_ctx_, av_format_ctx_->streams[video_stream_]->codecpar);
     if (ret != 0) {
         spdlog::error("Could not copy video codec context.");
@@ -152,7 +174,6 @@ void InputProcessor::initialize() {
 
     if (use_gpu_) {
         video_codec_ctx_->get_format  = get_hw_format;
-        av_opt_set_int(video_codec_ctx_, "refcounted_frames", 1, 0);
 
         if ((av_hwdevice_ctx_create(&hw_device_ctx_, type, NULL, NULL, 0)) < 0) {
             spdlog::error("Failed to create specified HW device.");
@@ -165,7 +186,6 @@ void InputProcessor::initialize() {
     video_frame_rate_ = Rational(av_format_ctx_->streams[video_stream_]->r_frame_rate.num, av_format_ctx_->streams[video_stream_]->r_frame_rate.den);
     video_codec_ctx_->thread_type = FF_THREAD_FRAME;
     video_codec_ctx_->thread_count = 1;
-    spdlog::info("SAR: {} / {}", video_codec_ctx_->sample_aspect_ratio.num, video_codec_ctx_->sample_aspect_ratio.den);
 
     ret = avcodec_open2(video_codec_ctx_, video_codec_, NULL);
     if (ret < 0) {
@@ -182,12 +202,6 @@ void InputProcessor::run() {
     char error_msg[AV_ERROR_MAX_STRING_SIZE];
 
     AVFrame *video_frame = nullptr;
-    video_frame = av_frame_alloc();
-    if (video_frame == nullptr) {
-        spdlog::error("Could not allocate video frame.");
-        throw runtime_error("Error occured");
-    }
-
     AVPacket* packet = av_packet_alloc();
     if (packet == NULL) {
         spdlog::error("Could not alloc packet,");
@@ -201,6 +215,19 @@ void InputProcessor::run() {
     int32_t ret;
     chrono::steady_clock::time_point start = chrono::steady_clock::now();
 
+    AVFrame *bgr_frame = av_frame_alloc();
+    bgr_frame->format = AV_PIX_FMT_BGR24;
+    bgr_frame->width = video_codec_ctx_->width;
+    bgr_frame->height = video_codec_ctx_->height;
+    uint32_t bgr_frame_size = av_image_get_buffer_size((AVPixelFormat)bgr_frame->format, bgr_frame->width, bgr_frame->height, 1);
+
+    ret = av_image_alloc(bgr_frame->data, bgr_frame->linesize, bgr_frame->width, bgr_frame->height, (AVPixelFormat)bgr_frame->format, 1);
+    if (ret < 0) {
+        spdlog::error("Error creating BGR frame");
+        throw runtime_error("Error creating BGR frame");
+    }
+
+    SwsContext* sws_ctx = nullptr;
     AVFrame *tmp_frame = nullptr;
     AVFrame *sw_frame = nullptr;
     while (av_read_frame(av_format_ctx_, packet) >= 0 && running_.load() == true) {
@@ -213,10 +240,18 @@ void InputProcessor::run() {
             }
 
             while (ret >= 0) {
+                video_frame = av_frame_alloc();
+                if (video_frame == nullptr) {
+                    spdlog::error("Could not allocate video frame.");
+                    throw runtime_error("Error occured");
+                }
+
                 ret = avcodec_receive_frame(video_codec_ctx_, video_frame);
                 if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF) {
+                    av_frame_free(&video_frame);
                     break;
                 } else if (ret < 0) {
+                    av_frame_free(&video_frame);
                     spdlog::error("Error while decoding.");
                     throw runtime_error("Error while decoding.");
                 }
@@ -236,10 +271,44 @@ void InputProcessor::run() {
                     tmp_frame = video_frame;
                 }
 
-                if(video_idx >= offset_) {
-                    uint32_t data_size = av_image_get_buffer_size(video_codec_ctx_->pix_fmt, video_codec_ctx_->width, video_codec_ctx_->height, 1);
-                    unique_ptr<uint8_t[]> data(new uint8_t[data_size]);
-                    av_image_copy_to_buffer(data.get(), data_size, tmp_frame->data, tmp_frame->linesize, video_codec_ctx_->pix_fmt, video_codec_ctx_->width, video_codec_ctx_->height, 1);
+                if (sws_ctx == nullptr) {
+                    // Use tmp_Frame pix_fmt because if use_gpu == true, the context format is cuda, not the actual frame format.
+                    sws_ctx = sws_getContext(tmp_frame->width, tmp_frame->height, (AVPixelFormat)tmp_frame->format, tmp_frame->width, tmp_frame->height, (AVPixelFormat)bgr_frame->format, SWS_BICUBIC, NULL, NULL, NULL);
+                    if (!sws_ctx) {
+                        spdlog::error("Error creating scaling context");
+                        throw runtime_error("Error creating scaling context");
+                    }
+                }
+
+                if (video_idx >= offset_) {
+                // Mat tst_yuv(tmp_frame->height*3/2, tmp_frame->width, CV_8UC1, *(tmp_frame->data));
+                // Mat tst;
+                // cvtColor(tst_yuv, tst, COLOR_YUV2BGR_NV12);
+                // 
+                // namedWindow("Frame", WINDOW_NORMAL);
+                // imshow("Frame", tst);
+                // waitKey();
+                // destroyAllWindows();
+  
+                    ret = sws_scale(sws_ctx, tmp_frame->data, tmp_frame->linesize, 0, tmp_frame->height, bgr_frame->data, bgr_frame->linesize);
+                    if(ret < 0) {
+                        spdlog::error("Error converting formats from video to bgr24");
+                        throw runtime_error("Error converting formats from video to bgr24");
+                    }
+                    
+                    unique_ptr<uint8_t[]> data(new uint8_t[bgr_frame_size]);
+                    ret = av_image_copy_to_buffer(data.get(), bgr_frame_size, bgr_frame->data, bgr_frame->linesize, (AVPixelFormat)bgr_frame->format, bgr_frame->width, bgr_frame->height, 1);
+                    if(ret < 0) {
+                        spdlog::error("Error copying image to buffer.");
+                        throw runtime_error("Error copying image to buffer.");
+                    }
+
+                    // Mat tst(bgr_frame->height, bgr_frame->width, CV_8UC3, *(bgr_frame->data));
+                    // Mat tst(bgr_frame->height, bgr_frame->width, CV_8UC3, data.get());
+                    // namedWindow("Frame", WINDOW_NORMAL);
+                    // imshow("Frame", tst);
+                    // waitKey();
+                    // destroyAllWindows();
 
                     unique_ptr<VideoPacket> input_packet(new VideoPacket);
                     input_packet->width = video_codec_ctx_->width;
@@ -247,7 +316,7 @@ void InputProcessor::run() {
                     input_packet->pts = tmp_frame->pts;
                     input_packet->pts_time =  tmp_frame->pts * av_q2d(av_format_ctx_->streams[video_stream_]->time_base);
                     input_packet->idx = video_idx-offset_;
-                    input_packet->data_size = data_size;
+                    input_packet->data_size = bgr_frame_size;
                     input_packet->data = move(data);
 
                     if(start_timestamp == std::numeric_limits<double>::max())
@@ -263,6 +332,8 @@ void InputProcessor::run() {
                 }
 
                 ++video_idx;
+                av_frame_free(&video_frame);
+                video_frame = nullptr;
                 av_frame_free(&sw_frame);
                 sw_frame = nullptr;
             }
@@ -298,10 +369,7 @@ void InputProcessor::run() {
     }
 
     av_packet_free(&packet);
-
-    // Free the YUV frame
-    av_frame_free(&video_frame);
-    av_free(video_frame);
+    sws_freeContext(sws_ctx);
 
     // Close the codecs
     avcodec_free_context(&video_codec_ctx_);

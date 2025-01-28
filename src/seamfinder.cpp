@@ -131,7 +131,7 @@ void writeStitchingData(const string& cameras_params_filename, const vector<Came
 
 int main(int argc, char* argv[]) {
     spdlog::set_pattern("%Y%m%dT%H:%M:%S.%e [%^%l%$] -%n- -%t- : %v");
-    spdlog::set_level(spdlog::level::debug);
+    spdlog::set_level(spdlog::level::trace);
 
     cv::setBreakOnError(true);
     cv::ocl::setUseOpenCL(false);
@@ -177,8 +177,10 @@ int main(int argc, char* argv[]) {
     }
 
     Mat output_image;
-    ImageCompositing compositor(cameras, masks_warped, images_size);
+    ImageCompositing compositor(false, cameras, masks_warped, images_size);
+    spdlog::info("Pre compo");
     compositor.compose(images, output_image);
+    spdlog::info("Compo");
 
     imwrite(result_name, output_image);
 
@@ -487,7 +489,7 @@ string seam_find_type = "voronoi";
     }
 
     Ptr<RotationWarper> warper = warper_creator->create(static_cast<float>(warped_image_scale));
-    spdlog::info("Warp askpect: {0:f}", static_cast<float>(warped_image_scale));
+    spdlog::info("Warp aspect: {0:f}", static_cast<float>(warped_image_scale));
 
     vector<Point> corners(num_images);
     for (int i = 0; i < num_images; ++i)
@@ -503,6 +505,7 @@ string seam_find_type = "voronoi";
 
         warper->warp(masks[i], K, cameras[i].R, INTER_NEAREST, BORDER_CONSTANT, masks_warped[i]);
     }
+    spdlog::info("Warped");
 
     vector<UMat> images_warped_f(num_images);
     for (int i = 0; i < num_images; ++i)

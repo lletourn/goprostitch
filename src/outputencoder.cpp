@@ -131,8 +131,6 @@ void OutputEncoder::init_video() {
             throw runtime_error("Could not allocate video codec context");
         }
 
-
-
         video_codec_ctx_->rc_max_rate = 11*104*10224;
         video_codec_ctx_->max_b_frames = 3;
         // video_codec_ctx_->profile = NV_ENC_PROFILE_HEVC_MAIN;  NOT ACCESSIBLE PUBLICALY. Use codec priv_data
