@@ -195,6 +195,7 @@ void InputProcessor::initialize() {
 }
 
 void InputProcessor::run() {
+    spdlog::info("[inputproc] Starting..");
     #ifdef _GNU_SOURCE
     pthread_setname_np(pthread_self(), "InputProcessor");
     #endif
@@ -281,15 +282,6 @@ void InputProcessor::run() {
                 }
 
                 if (video_idx >= offset_) {
-                // Mat tst_yuv(tmp_frame->height*3/2, tmp_frame->width, CV_8UC1, *(tmp_frame->data));
-                // Mat tst;
-                // cvtColor(tst_yuv, tst, COLOR_YUV2BGR_NV12);
-                // 
-                // namedWindow("Frame", WINDOW_NORMAL);
-                // imshow("Frame", tst);
-                // waitKey();
-                // destroyAllWindows();
-  
                     ret = sws_scale(sws_ctx, tmp_frame->data, tmp_frame->linesize, 0, tmp_frame->height, bgr_frame->data, bgr_frame->linesize);
                     if(ret < 0) {
                         spdlog::error("Error converting formats from video to bgr24");
@@ -302,13 +294,6 @@ void InputProcessor::run() {
                         spdlog::error("Error copying image to buffer.");
                         throw runtime_error("Error copying image to buffer.");
                     }
-
-                    // Mat tst(bgr_frame->height, bgr_frame->width, CV_8UC3, *(bgr_frame->data));
-                    // Mat tst(bgr_frame->height, bgr_frame->width, CV_8UC3, data.get());
-                    // namedWindow("Frame", WINDOW_NORMAL);
-                    // imshow("Frame", tst);
-                    // waitKey();
-                    // destroyAllWindows();
 
                     unique_ptr<VideoPacket> input_packet(new VideoPacket);
                     input_packet->width = video_codec_ctx_->width;
@@ -325,7 +310,9 @@ void InputProcessor::run() {
                     auto delta = chrono::duration_cast<chrono::milliseconds>(chrono::steady_clock::now() - video_start).count();
                     double video_fps = (1.0/delta) * 1000.0;
  
+                    spdlog::trace("[inputproc] sending frame {}", video_idx-offset_);
                     video_packet_queue_.push(move(input_packet));
+                    spdlog::trace("[inputproc] sent frame {}", video_idx-offset_);
                     // delta = chrono::duration_cast<chrono::milliseconds>(chrono::steady_clock::now() - start).count();
                     // double all_fps = ((double)video_idx/delta) * 1000.0;
                     // spdlog::debug("Input FPS: {} All FPS: {}", video_fps, all_fps);
@@ -368,6 +355,7 @@ void InputProcessor::run() {
         av_packet_unref(packet);
     }
 
+    spdlog::info("[inputproc] Cleaning up");
     av_packet_free(&packet);
     sws_freeContext(sws_ctx);
 
@@ -380,4 +368,5 @@ void InputProcessor::run() {
 
     running_ = false;
     done_ = true;
+    spdlog::info("[inputproc] Done");
 }

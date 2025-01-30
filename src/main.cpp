@@ -151,6 +151,11 @@ void process_videos(
             spdlog::info("Inputs done, stopping loop...");
             break;
         }
+
+        if(left_processor.is_done())
+            input_syncer.left_is_done();
+        if(right_processor.is_done())
+            input_syncer.right_is_done();
     }
 
     // Cleanup

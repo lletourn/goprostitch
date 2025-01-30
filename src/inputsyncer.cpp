@@ -8,6 +8,8 @@ using namespace std;
 InputSyncer::InputSyncer(ThreadSafeQueue<VideoPacket>& left_queue, ThreadSafeQueue<VideoPacket>& right_queue)
 : left_queue_(left_queue), right_queue_(right_queue) {
     readers_are_done_ = false;
+    left_is_done_ = false;
+    right_is_done_ = false;
     next_frame_idx_ = 0;
     last_frame_idx_ = numeric_limits<int32_t>::max();
     left_packet_.reset(nullptr);
@@ -31,14 +33,21 @@ unique_ptr<LeftRightPacket> InputSyncer::next_pair() {
         right_packet_ = right_queue_.pop(wait_period);
     }
 
-    if(next_frame_idx_ >= last_frame_idx_ && (right_packet_ || left_packet_)) {
-        left_packet_.reset(nullptr);
+    if(left_is_done_ && !left_packet_) {
+        // Empty the queue
+        right_packet_ = right_queue_.pop(wait_period);
         right_packet_.reset(nullptr);
     }
+    if(right_is_done_ && !right_packet_) {
+        // Empty the queue
+        left_packet_ = left_queue_.pop(wait_period);
+        left_packet_.reset(nullptr);
+    }
 
-    spdlog::debug("NextFrame: {} Has Left frame: {} Has Right Frame: {}", next_frame_idx_, (bool)left_packet_, (bool)right_packet_);
+    if(next_frame_idx_ < last_frame_idx_)
+        spdlog::debug("NextFrame: {} Has Left frame: {} Has Right Frame: {}", next_frame_idx_, (bool)left_packet_, (bool)right_packet_);
 
-    if((!left_packet_ || !right_packet_) && readers_are_done_ && last_frame_idx_ == numeric_limits<int32_t>::max())
+    if((!left_packet_ && left_is_done_) || (!right_packet_ && right_is_done_) && last_frame_idx_ == numeric_limits<int32_t>::max())
         last_frame_idx_ = next_frame_idx_;
 
     if(left_packet_ && right_packet_ && left_packet_->idx == next_frame_idx_ && right_packet_->idx == next_frame_idx_) {

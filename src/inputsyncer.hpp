@@ -13,6 +13,8 @@ class InputSyncer {
     ~InputSyncer();
 
     void set_reader_done() {readers_are_done_ = true;};
+    void left_is_done() {left_is_done_ = true;};
+    void right_is_done() {right_is_done_ = true;};
     std::unique_ptr<LeftRightPacket> next_pair();
 
  private:
@@ -20,6 +22,8 @@ class InputSyncer {
     ThreadSafeQueue<VideoPacket>& right_queue_;
 
     bool readers_are_done_;
+    bool left_is_done_;
+    bool right_is_done_;
     uint32_t next_frame_idx_;
     uint32_t last_frame_idx_;
     std::unique_ptr<VideoPacket> left_packet_;

@@ -43,6 +43,7 @@ class OutputEncoder {
     AVColorSpace colorspace_;
     AVColorRange color_range_;
     uint32_t pool_size_;
+    AVPixelFormat encoder_pix_fmt_;
 
     ThreadSafeQueue<AVPacket, PacketDeleter>& left_audio_packet_queue_;
     ThreadSafeQueue<AVPacket, PacketDeleter>& right_audio_packet_queue_;

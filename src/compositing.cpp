@@ -34,6 +34,7 @@ ImageCompositing::ImageCompositing(bool do_blending, const vector<cv::detail::Ca
 
     float warped_image_scale = compute_warped_image_scale(cameras);
     Ptr<WarperCreator> warper_creator = makePtr<cv::CylindricalWarper>();
+    //Ptr<WarperCreator> warper_creator = makePtr<cv::CylindricalWarperGpu>();
     if (!warper_creator) {
         throw runtime_error("Can't create the Cylindrical warper");
     }
@@ -98,14 +99,16 @@ ImageCompositing::~ImageCompositing() {
   
 void ImageCompositing::compose(const vector<Mat>& images, Mat& output_image) {
 
+    spdlog::trace("[compositing] Start");
     int num_images = static_cast<int>(images.size());
     vector<Mat> full_imgs(num_images);
+    spdlog::trace("[compositing] Clone images");
     full_imgs[0] = images[0].clone();
     full_imgs[1] = images[1].clone();
     
+    spdlog::trace("[compositing] Create pano placeholder");
     Mat pano_img(panoramic_image_size_, CV_8UC3, Scalar(0,0,0));
 
-    spdlog::trace("[compositing] Start");
     Mat img;
     //int blend_type = Blender::NO;
     //int blend_type = Blender::FEATHER;
@@ -133,9 +136,11 @@ void ImageCompositing::compose(const vector<Mat>& images, Mat& output_image) {
         spdlog::trace("[compositing] [{}] Converted to float", img_idx);
         // Warp the current image
         warper_->warp(img, K, cameras_parameters_[img_idx].R, INTER_LINEAR, BORDER_REFLECT, img_warped);
+        spdlog::trace("[compositing] [{}] Image warped", img_idx);
         if(!do_blending_) {
             Mat roi_to_fill(pano_img, cv::Rect(corners_[img_idx].x-top_left_.x, corners_[img_idx].y-top_left_.y, img_warped.cols, img_warped.rows));
             img_warped.copyTo(roi_to_fill, blending_masks_[img_idx]);
+            spdlog::trace("[compositing] [{}] Filled ROI with current masked image", img_idx);
         } else {
             spdlog::trace("[compositing] [{}] Warped", img_idx);
             img_warped.convertTo(img_warped_s, CV_16S);

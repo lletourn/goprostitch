@@ -11,6 +11,7 @@ extern "C" {
   #include <libavutil/error.h>
   #include <libavutil/imgutils.h>
   #include <libavutil/opt.h>
+  #include <libswscale/swscale.h>
 }
 
 using namespace std;
@@ -45,6 +46,8 @@ OutputEncoder::OutputEncoder(
   right_audio_packet_queue_(right_audio_queue),
   panoramic_packet_queue_(queue_size),
   pool_size_(nb_threads) {
+
+    encoder_pix_fmt_ = AV_PIX_FMT_YUV444P;
     audio_time_base_ = (AVRational){(int)audio_time_base.num, (int)audio_time_base.den};
 };
 
@@ -177,7 +180,7 @@ void OutputEncoder::init_video() {
     }
 
     video_codec_ctx_->codec_id = video_codec_->id;
-    video_codec_ctx_->pix_fmt = AV_PIX_FMT_YUV420P;
+    video_codec_ctx_->pix_fmt = encoder_pix_fmt_;
     video_stream_->time_base = video_time_base_;
     video_codec_ctx_->time_base = (AVRational){video_frame_rate_.den, video_frame_rate_.num};
     video_codec_ctx_->framerate = video_frame_rate_;
@@ -260,15 +263,31 @@ void OutputEncoder::run() {
     pthread_setname_np(pthread_self(), "OutputEncoder");
     #endif
 
+    int32_t ret;
     chrono::milliseconds audio_wait(chrono::milliseconds(1));
     chrono::milliseconds video_wait(chrono::milliseconds(100));
 
-    AVPacket* video_pkt;
-
-    video_pkt = av_packet_alloc();
+    AVPacket* video_pkt = av_packet_alloc();
     if (!video_pkt) {
         spdlog::error("Couldn't allocate video packet");
         throw runtime_error("Couldn't allocate video packet");
+    }
+
+    AVFrame *bgr_frame = av_frame_alloc();
+    bgr_frame->format = AV_PIX_FMT_BGR24;
+    bgr_frame->width = video_width_;
+    bgr_frame->height = video_height_;
+    uint32_t bgr_frame_size = av_image_get_buffer_size((AVPixelFormat)bgr_frame->format, bgr_frame->width, bgr_frame->height, 1);
+
+    ret = av_image_alloc(bgr_frame->data, bgr_frame->linesize, bgr_frame->width, bgr_frame->height, (AVPixelFormat)bgr_frame->format, 1);
+    if (ret < 0) {
+        spdlog::error("Error creating BGR frame");
+        throw runtime_error("Error creating BGR frame");
+    }
+    SwsContext* sws_ctx = sws_getContext(bgr_frame->width, bgr_frame->height, (AVPixelFormat)bgr_frame->format, video_width_, video_height_, encoder_pix_fmt_, SWS_BICUBIC, NULL, NULL, NULL);
+    if (!sws_ctx) {
+        spdlog::error("Error creating output scaling context");
+        throw runtime_error("Error creating output scaling context");
     }
 
     uint32_t frame_idx=0;
@@ -278,6 +297,7 @@ void OutputEncoder::run() {
     double read_left_audio = std::numeric_limits<double>::max();
     double read_right_audio = std::numeric_limits<double>::max();
     while(running_) {
+        spdlog::debug("[outputenc] Process packets");
         while(true) {
             unique_ptr<AVPacket, PacketDeleter> audio_packet(left_audio_packet_queue_.pop(audio_wait));
             if(audio_packet) {
@@ -330,7 +350,7 @@ void OutputEncoder::run() {
                 audio_packet.reset();
             }
 
-            int32_t ret = av_frame_make_writable(video_frame_);
+            ret = av_frame_make_writable(video_frame_);
             if (ret < 0) {
                 spdlog::error("Error making video frame writable");
                 throw runtime_error("Error making video frame writable");
@@ -339,17 +359,19 @@ void OutputEncoder::run() {
             video_frame_->pts = frame_idx;
             video_frame_->time_base = (AVRational){video_frame_rate_.den, video_frame_rate_.num};
             video_frame_->duration = 1;
-            spdlog::debug("Frame PTS: %ld timebase: %d/%d  Duration: %ld", video_frame_->pts, video_frame_->time_base.num, video_frame_->time_base.den, video_frame_->duration);
-            spdlog::debug("Codec Framerate: %d/%d timebase: %d/%d", video_codec_ctx_->framerate.num, video_codec_ctx_->framerate.den, video_codec_ctx_->time_base.num, video_codec_ctx_->time_base.den);
-            spdlog::debug("Stream Framerate: %d/%d", video_stream_->time_base.num, video_stream_->time_base.den);
-
-            // video_frame_->pts = frame_idx;
             ++frame_idx;
-            ret = av_image_fill_arrays(video_frame_->data, video_frame_->linesize, current_panoramic_packet->data.get(), video_codec_ctx_->pix_fmt, video_frame_->width, video_frame_->height, 1);
+            ret = av_image_fill_arrays(bgr_frame->data, bgr_frame->linesize, current_panoramic_packet->data.get(), (AVPixelFormat)bgr_frame->format, bgr_frame->width, bgr_frame->height, 1);
             if (ret < 0) {
                 spdlog::error("Error filling image array");
                 throw runtime_error("Error filling image array");
             }
+
+            ret = sws_scale(sws_ctx, bgr_frame->data, bgr_frame->linesize, 0, video_frame_->height, video_frame_->data, video_frame_->linesize);
+            if(ret < 0) {
+                spdlog::error("Error converting formats from bgr to encoder");
+                throw runtime_error("Error converting formats from bgr to encoder");
+            }
+
             ret = avcodec_send_frame(video_codec_ctx_, video_frame_);
             if (ret < 0) {
                 spdlog::error("Error sending a frame for encoding");
@@ -397,7 +419,6 @@ void OutputEncoder::run() {
     }
 
     // Flush buffers
-    int32_t ret;
     ret = avcodec_send_frame(video_codec_ctx_, nullptr);
     while (ret >= 0) {
         ret = avcodec_receive_packet(video_codec_ctx_, video_pkt);
@@ -418,6 +439,9 @@ void OutputEncoder::run() {
     }
 
     av_write_trailer(av_format_ctx_);
+
+    sws_freeContext(sws_ctx);
+    av_frame_free(&bgr_frame);
 
     av_packet_free(&video_pkt);
 
