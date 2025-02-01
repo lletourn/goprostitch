@@ -34,7 +34,7 @@ ImageCompositing::ImageCompositing(bool do_blending, const vector<cv::detail::Ca
 
     float warped_image_scale = compute_warped_image_scale(cameras);
     Ptr<WarperCreator> warper_creator = makePtr<cv::CylindricalWarper>();
-    //Ptr<WarperCreator> warper_creator = makePtr<cv::CylindricalWarperGpu>();
+    // Ptr<WarperCreator> warper_creator = makePtr<cv::CylindricalWarperGpu>();  Can't use GPU causes weird warping artifacts
     if (!warper_creator) {
         throw runtime_error("Can't create the Cylindrical warper");
     }

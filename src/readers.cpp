@@ -28,7 +28,6 @@ void readSeamData(const string& cameras_filename, vector<CameraParams>& cameras,
         stringstream ss;
         ss << "warped_seam_mask_" << cam_idx << ".png";
         string image_name = file_path.replace_filename(ss.str());
-        cout << image_name << endl;
 
         tmp = imread(image_name, IMREAD_GRAYSCALE);
         UMat img;
@@ -55,7 +54,6 @@ void readSeamData(const string& cameras_filename, vector<CameraParams>& cameras,
         }
 
         cameras.push_back(move(cp));
-        cout << "Initial camera intrinsics #" << cam_idx+1 << ":\nK:\n" << cp.K() << "\nR:\n" << cp.R << endl;
         cam_idx++;
     }
 

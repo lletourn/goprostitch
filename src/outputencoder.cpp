@@ -301,6 +301,7 @@ void OutputEncoder::run() {
         while(true) {
             unique_ptr<AVPacket, PacketDeleter> audio_packet(left_audio_packet_queue_.pop(audio_wait));
             if(audio_packet) {
+                spdlog::trace("[outputenc] Got left audio packet");
                 double pts_time = audio_packet->pts * av_q2d(left_audio_stream_->time_base);
                 if(use_left_audio_ || pts_time >= read_right_audio)
                     left_audio_packets_.push(move(audio_packet));
@@ -313,6 +314,7 @@ void OutputEncoder::run() {
         while(true) {
             unique_ptr<AVPacket, PacketDeleter> audio_packet(right_audio_packet_queue_.pop(audio_wait));
             if(audio_packet) {
+                spdlog::trace("[outputenc] Got right audio packet");
                 double pts_time = audio_packet->pts * av_q2d(left_audio_stream_->time_base);
                 if(!use_left_audio_ || pts_time >= read_left_audio)
                     right_audio_packets_.push(move(audio_packet));
@@ -334,15 +336,20 @@ void OutputEncoder::run() {
             video_packets.erase(frame_idx);
 
             //raise(SIGINT);
-            while(!left_audio_packets_.empty() && (left_audio_packets_.front()->pts * av_q2d(left_audio_stream_->time_base)) <= current_panoramic_packet->pts_time) {
-                // Encode audio
+            double left_audio_pts_time = left_audio_packets_.front()->pts * av_q2d(left_audio_stream_->time_base);
+            double right_audio_pts_time = right_audio_packets_.front()->pts * av_q2d(right_audio_stream_->time_base);
+            spdlog::trace("[outputenc] VideoPacketPtsTime: {} LeftAudioPtsTime: {} RightAudioPtsTime: {}", current_panoramic_packet->pts_time, left_audio_pts_time, right_audio_pts_time);
+            while(!left_audio_packets_.empty() && left_audio_pts_time <= current_panoramic_packet->pts_time) {
+                spdlog::trace("[outputenc] Writing left audio packet");
+                // Passthru audio
                 unique_ptr<AVPacket, PacketDeleter> audio_packet(move(left_audio_packets_.front()));
                 write_audio(audio_packet.get(), left_audio_stream_);
 
                 left_audio_packets_.pop();
                 audio_packet.reset();
             }
-            while(!right_audio_packets_.empty() && (right_audio_packets_.front()->pts * av_q2d(right_audio_stream_->time_base)) <= current_panoramic_packet->pts_time) {
+            while(!right_audio_packets_.empty() && right_audio_pts_time <= current_panoramic_packet->pts_time) {
+                spdlog::trace("[outputenc] Writing right audio packet");
                 unique_ptr<AVPacket, PacketDeleter> audio_packet(move(right_audio_packets_.front()));
                 write_audio(audio_packet.get(), right_audio_stream_);
 

@@ -8,12 +8,9 @@ extern "C" {
   #include <libavutil/error.h>
   #include <libavutil/imgutils.h>
   #include <libavutil/opt.h>
-  #include <libswscale/swscale.h>
 }
 
-#include <opencv2/opencv.hpp>
 using namespace std;
-using namespace cv;
 
 string gen_random(const int len) {
     static const char alphanum[] =
@@ -26,7 +23,7 @@ string gen_random(const int len) {
     for (int i = 0; i < len; ++i) {
         tmp_s += alphanum[rand() % (sizeof(alphanum) - 1)];
     }
-    
+
     return tmp_s;
 }
 
@@ -45,7 +42,18 @@ static AVPixelFormat get_hw_format(AVCodecContext *ctx, const enum AVPixelFormat
 
 
 InputProcessor::InputProcessor(const string& filename, bool use_gpu, uint32_t offset, uint32_t queue_size)
-: filename_(filename), use_gpu_(use_gpu), offset_(offset), timecode_(0), running_(false), done_(false), video_packet_queue_(queue_size), audio_packet_queue_(queue_size), video_time_base_(Rational(0,0)), video_frame_rate_(Rational(0,0)), audio_time_base_(Rational(0,0)) {
+: filename_(filename),
+  use_gpu_(use_gpu),
+  offset_(offset),
+  timecode_(0),
+  running_(false),
+  done_(false),
+  video_packet_queue_(queue_size),
+  audio_packet_queue_(queue_size),
+  video_time_base_(Rational(0,0)),
+  video_frame_rate_(Rational(0,0)),
+  audio_time_base_(Rational(0,0)) {
+    pixel_format_ = PixelFormat::PIX_FMT_NONE;
     av_format_ctx_ = nullptr;
     hw_device_ctx_ = nullptr;
 }
@@ -71,7 +79,7 @@ void InputProcessor::stop() {
 
 bool InputProcessor::is_done() {
     return done_.load();
-} 
+}
 
 ThreadSafeQueue<VideoPacket>& InputProcessor::getOutVideoQueue() {
     return video_packet_queue_;
@@ -199,7 +207,7 @@ void InputProcessor::run() {
     #ifdef _GNU_SOURCE
     pthread_setname_np(pthread_self(), "InputProcessor");
     #endif
-   
+
     char error_msg[AV_ERROR_MAX_STRING_SIZE];
 
     AVFrame *video_frame = nullptr;
@@ -216,19 +224,7 @@ void InputProcessor::run() {
     int32_t ret;
     chrono::steady_clock::time_point start = chrono::steady_clock::now();
 
-    AVFrame *bgr_frame = av_frame_alloc();
-    bgr_frame->format = AV_PIX_FMT_BGR24;
-    bgr_frame->width = video_codec_ctx_->width;
-    bgr_frame->height = video_codec_ctx_->height;
-    uint32_t bgr_frame_size = av_image_get_buffer_size((AVPixelFormat)bgr_frame->format, bgr_frame->width, bgr_frame->height, 1);
-
-    ret = av_image_alloc(bgr_frame->data, bgr_frame->linesize, bgr_frame->width, bgr_frame->height, (AVPixelFormat)bgr_frame->format, 1);
-    if (ret < 0) {
-        spdlog::error("Error creating BGR frame");
-        throw runtime_error("Error creating BGR frame");
-    }
-
-    SwsContext* sws_ctx = nullptr;
+    uint32_t output_frame_size = 0;
     AVFrame *tmp_frame = nullptr;
     AVFrame *sw_frame = nullptr;
     while (av_read_frame(av_format_ctx_, packet) >= 0 && running_.load() == true) {
@@ -267,29 +263,37 @@ void InputProcessor::run() {
                         spdlog::error("Error transferring the data to system memory.");
                         throw runtime_error("Error transferring the data to system memory");
                     }
+
+                    // Important or else pts, time_base and other params aren't set from the frame that comes back from the HW decoder.
+                    if (av_frame_copy_props(sw_frame, video_frame) < 0) {
+                        spdlog::error("Error transferring the frame properties.");
+                        throw runtime_error("Error transferring the frame properties");
+                    }
+
                     tmp_frame = sw_frame;
                 } else {
                     tmp_frame = video_frame;
                 }
 
-                if (sws_ctx == nullptr) {
-                    // Use tmp_Frame pix_fmt because if use_gpu == true, the context format is cuda, not the actual frame format.
-                    sws_ctx = sws_getContext(tmp_frame->width, tmp_frame->height, (AVPixelFormat)tmp_frame->format, tmp_frame->width, tmp_frame->height, (AVPixelFormat)bgr_frame->format, SWS_BICUBIC, NULL, NULL, NULL);
-                    if (!sws_ctx) {
-                        spdlog::error("Error creating scaling context");
-                        throw runtime_error("Error creating scaling context");
+                if (pixel_format_ == PIX_FMT_NONE) {
+                    switch ((AVPixelFormat)tmp_frame->format) {
+                        case AV_PIX_FMT_NV12:
+                            pixel_format_ = PIX_FMT_YUV420_NV12;
+                            break;
+                        case AV_PIX_FMT_YUV420P:
+                            pixel_format_ = PIX_FMT_YUV420_P;
+                            break;
+                        default:
+                            spdlog::error("Unsupported pixel format input: {}", tmp_frame->format);
+                            throw runtime_error("Unsupported pixel format input");
                     }
+
+                    output_frame_size = av_image_get_buffer_size((AVPixelFormat)tmp_frame->format, tmp_frame->width, tmp_frame->height, 1);
                 }
 
                 if (video_idx >= offset_) {
-                    ret = sws_scale(sws_ctx, tmp_frame->data, tmp_frame->linesize, 0, tmp_frame->height, bgr_frame->data, bgr_frame->linesize);
-                    if(ret < 0) {
-                        spdlog::error("Error converting formats from video to bgr24");
-                        throw runtime_error("Error converting formats from video to bgr24");
-                    }
-                    
-                    unique_ptr<uint8_t[]> data(new uint8_t[bgr_frame_size]);
-                    ret = av_image_copy_to_buffer(data.get(), bgr_frame_size, bgr_frame->data, bgr_frame->linesize, (AVPixelFormat)bgr_frame->format, bgr_frame->width, bgr_frame->height, 1);
+                    unique_ptr<uint8_t[]> data(new uint8_t[output_frame_size]);
+                    ret = av_image_copy_to_buffer(data.get(), output_frame_size, tmp_frame->data, tmp_frame->linesize, (AVPixelFormat)tmp_frame->format, tmp_frame->width, tmp_frame->height, 1);
                     if(ret < 0) {
                         spdlog::error("Error copying image to buffer.");
                         throw runtime_error("Error copying image to buffer.");
@@ -299,9 +303,9 @@ void InputProcessor::run() {
                     input_packet->width = video_codec_ctx_->width;
                     input_packet->height = video_codec_ctx_->height;
                     input_packet->pts = tmp_frame->pts;
-                    input_packet->pts_time =  tmp_frame->pts * av_q2d(av_format_ctx_->streams[video_stream_]->time_base);
+                    input_packet->pts_time =  tmp_frame->pts * av_q2d(tmp_frame->time_base);
                     input_packet->idx = video_idx-offset_;
-                    input_packet->data_size = bgr_frame_size;
+                    input_packet->data_size = output_frame_size;
                     input_packet->data = move(data);
 
                     if(start_timestamp == std::numeric_limits<double>::max())
@@ -309,7 +313,7 @@ void InputProcessor::run() {
 
                     auto delta = chrono::duration_cast<chrono::milliseconds>(chrono::steady_clock::now() - video_start).count();
                     double video_fps = (1.0/delta) * 1000.0;
- 
+
                     spdlog::trace("[inputproc] sending frame {}", video_idx-offset_);
                     video_packet_queue_.push(move(input_packet));
                     spdlog::trace("[inputproc] sent frame {}", video_idx-offset_);
@@ -357,7 +361,7 @@ void InputProcessor::run() {
 
     spdlog::info("[inputproc] Cleaning up");
     av_packet_free(&packet);
-    sws_freeContext(sws_ctx);
+    // sws_freeContext(sws_ctx);
 
     // Close the codecs
     avcodec_free_context(&video_codec_ctx_);

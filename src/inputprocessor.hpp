@@ -28,6 +28,7 @@ class InputProcessor {
     Rational video_time_base() {return video_time_base_;};
     Rational video_frame_rate() {return video_frame_rate_;};
     Rational audio_time_base() {return audio_time_base_;};
+    PixelFormat pixel_format() {return pixel_format_;};
     AVColorSpace colorspace() {return colorspace_;};
     AVColorRange color_range() {return color_range_;};
     double duration() {return duration_;};
@@ -49,6 +50,7 @@ class InputProcessor {
     Rational video_time_base_;
     Rational video_frame_rate_;
     Rational audio_time_base_;
+    PixelFormat pixel_format_;
     AVColorSpace colorspace_;
     AVColorRange color_range_;
     double duration_;

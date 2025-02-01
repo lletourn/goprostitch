@@ -10,6 +10,14 @@ extern "C" {
     #include <libavcodec/packet.h>
 }
 
+enum PixelFormat {
+    PIX_FMT_NONE = 0,
+    PIX_FMT_YUV420_NV12, // Semi packed
+    PIX_FMT_YUV420_P, // Planar P == I420
+    PIX_FMT_RGB24,
+    PIX_FMT_BGR24
+};
+
 struct Rational {
     uint32_t num;
     uint32_t den;

@@ -110,6 +110,7 @@ void process_videos(
     double prev_delta = 0;
     uint32_t fps_frame_counter = 0;
     int32_t stop_at = 0;
+    bool pre_first_frame_setup_done = false;
     while(true) {
         bool read_packet = false;
 
@@ -118,6 +119,14 @@ void process_videos(
             ++stop_at;
             ++fps_frame_counter;
             read_packet = true;
+
+            if(!pre_first_frame_setup_done) {
+                for(const unique_ptr<FrameStitcher>& fs : frame_stitchers) {
+                    fs->set_input_pixel_format(left_processor.pixel_format());
+                }
+                pre_first_frame_setup_done = true;
+            }
+
             stitcher_queue.push(move(lr_packet));
 
             double delta = chrono::duration_cast<chrono::milliseconds>(chrono::steady_clock::now() - start).count();
@@ -181,7 +190,7 @@ void process_videos(
 int main(int argc, const char ** argv) {
     cv::setNumThreads(0);
     spdlog::set_pattern("%Y%m%dT%H:%M:%S.%e [%^%l%$] -%n- -%t- : %v");
-    spdlog::set_level(spdlog::level::info);
+    spdlog::set_level(spdlog::level::debug);
 
     const String keys =
         "{help h usage ? | | print this message }"
@@ -220,7 +229,6 @@ int main(int argc, const char ** argv) {
     double eta_refresh_rate(parser.get<double>("etarefreshrate"));
     int32_t duration(parser.get<int32_t>("duration"));
 
-    cout << "WTF: " << eta_refresh_rate << endl;
     process_videos(use_gpu, left_filename, right_filename, output_filename, left_video_offset, right_video_offset, camera_params_filename, camera_intrinsics_filename, nb_stitch_workers, nb_encoding_threads, eta_refresh_rate, duration, fix_exposure);
     spdlog::info("Done");
 }

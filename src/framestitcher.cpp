@@ -90,7 +90,7 @@ void FrameStitcher::MatchHistograms(Mat& image, const std::vector<std::vector<do
     float range[] = { 0, 256 }; //the upper boundary is exclusive
     const float* histRange[] = { range };
 
-    
+
     vector<Mat> bgr_hists(3);
     vector<uint8_t> interp_a_values;
     for(uint32_t i=0; i < bgr_planes.size(); ++i) {
@@ -171,6 +171,11 @@ FrameStitcher::~FrameStitcher() {
 }
 
 
+void FrameStitcher::set_input_pixel_format(PixelFormat input_pix_fmt) {
+    input_pixel_format_ = input_pix_fmt;
+}
+
+
 void FrameStitcher::start() {
     if (thread_.joinable()) {
         return;
@@ -190,13 +195,13 @@ void FrameStitcher::stop() {
 
 bool FrameStitcher::is_done() {
     return done_.load();
-} 
+}
 
 void FrameStitcher::run() {
     #ifdef _GNU_SOURCE
     pthread_setname_np(pthread_self(), "FrameStitcher");
     #endif
-   
+
     vector<Mat> images(2);
     Mat panoramic_image;
     Mat panoramic_image_cropped;
@@ -209,27 +214,40 @@ void FrameStitcher::run() {
     vector<Size> image_sizes = {calibration_image_size_, calibration_image_size_};
     ImageCompositing compositor(false, camera_params_, image_masks_, image_sizes);
 
+    Mat tmp_left;
+    Mat tmp_right;
     while(running_) {
         spdlog::debug("[framestitching] Getting LR");
         unique_ptr<LeftRightPacket> left_right_packet(stitcher_queue_.pop(chrono::seconds(1)));
         if(left_right_packet) {
             spdlog::debug("[framestitching] Got LR packet");
-            Mat left(left_right_packet->height, left_right_packet->width, CV_8UC3, left_right_packet->left_data.get());
-            Mat right(left_right_packet->height, left_right_packet->width, CV_8UC3, left_right_packet->right_data.get());
-            // spdlog::trace("Got LR");
-            // Mat left(left_right_packet->height * 3/2, left_right_packet->width, CV_8UC1, left_right_packet->left_data.get());
-            // spdlog::trace("Created left");
-            // Mat right(left_right_packet->height * 3/2, left_right_packet->width, CV_8UC1, left_right_packet->right_data.get());
-            // spdlog::trace("Created right");
 
-            // cvtColor(left, images[0], COLOR_YUV2BGR_I420);
-            // cvtColor(right, images[1], COLOR_YUV2BGR_I420);
-            // remap(images[0], images[0], map1, map2, INTER_LINEAR);
-            // remap(images[1], images[1], map1, map2, INTER_LINEAR);
-            spdlog::trace("[framestitching] Remap left right");
-            remap(left, images[0], map1, map2, INTER_LINEAR);
-            remap(right, images[1], map1, map2, INTER_LINEAR);
-            spdlog::trace("[framestitching] Un distorted left right");
+            if(input_pixel_format_ == PIX_FMT_BGR24) {
+                spdlog::trace("Creating left/right");
+                Mat left(left_right_packet->height, left_right_packet->width, CV_8UC3, left_right_packet->left_data.get());
+                Mat right(left_right_packet->height, left_right_packet->width, CV_8UC3, left_right_packet->right_data.get());
+            } else if(input_pixel_format_ == PIX_FMT_YUV420_NV12) {
+                spdlog::trace("Creating left/right");
+                Mat left(left_right_packet->height * 3/2, left_right_packet->width, CV_8UC1, left_right_packet->left_data.get());
+                Mat right(left_right_packet->height * 3/2, left_right_packet->width, CV_8UC1, left_right_packet->right_data.get());
+                spdlog::trace("Converting from NV12 to BGR");
+                cvtColor(left, tmp_left, COLOR_YUV2BGR_NV12);
+                cvtColor(right, tmp_right, COLOR_YUV2BGR_NV12);
+            } else if(input_pixel_format_ == PIX_FMT_YUV420_P) {
+                spdlog::trace("Creating left/right");
+                Mat left(left_right_packet->height * 3/2, left_right_packet->width, CV_8UC1, left_right_packet->left_data.get());
+                Mat right(left_right_packet->height * 3/2, left_right_packet->width, CV_8UC1, left_right_packet->right_data.get());
+                spdlog::trace("Converting from NV12 to BGR");
+                cvtColor(left, tmp_left, COLOR_YUV2BGR_I420);
+                cvtColor(right, tmp_right, COLOR_YUV2BGR_I420);
+            } else {
+                spdlog::error("Unsupported pixel format: {}", input_pixel_format_);
+                throw runtime_error("Unsupported pixel format.");
+            }
+            spdlog::trace("[framestitching] Undistort left/right");
+            remap(tmp_left, images[0], map1, map2, INTER_LINEAR);
+            remap(tmp_right, images[1], map1, map2, INTER_LINEAR);
+            spdlog::trace("[framestitching] Undistorted left/right");
 
             if(match_histogram_)
                 MatchHistograms(images[1], reference_bgr_cumsum_, reference_bgr_value_idxs_);
@@ -242,8 +260,9 @@ void FrameStitcher::run() {
             spdlog::trace("[framestitching] Cropped pano");
 
             panoramic_image_cropped = cropped_image.clone();  // Make the crop contiguous
+            // This should be done here, but it's slow enough!
             //cvtColor(cropped_image, panoramic_image_yuv, COLOR_BGR2YUV_I420);
-            //spdlog::trace("Converted to YUV NV12");
+            //spdlog::trace("Converted to YUV I420, planar");
 
             unique_ptr<PanoramicPacket> pano_packet(new PanoramicPacket);
             spdlog::trace("[framestitching] Created pano packet");
