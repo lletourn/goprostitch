@@ -190,7 +190,7 @@ void process_videos(
 int main(int argc, const char ** argv) {
     cv::setNumThreads(0);
     spdlog::set_pattern("%Y%m%dT%H:%M:%S.%e [%^%l%$] -%n- -%t- : %v");
-    spdlog::set_level(spdlog::level::debug);
+    spdlog::set_level(spdlog::level::info);
 
     const String keys =
         "{help h usage ? | | print this message }"
