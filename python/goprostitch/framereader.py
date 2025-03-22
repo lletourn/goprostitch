@@ -2,7 +2,6 @@ import av  # type: ignore
 from collections import defaultdict
 from collections import OrderedDict
 from dataclasses import dataclass
-import fractions
 import json
 import logging
 import numpy as np
@@ -15,7 +14,6 @@ from typing import Dict
 from typing import List
 from typing import Optional
 from typing import Self
-from typing import Tuple
 from typing import Type
 from types import TracebackType
 
@@ -38,15 +36,6 @@ class FrameIndex:
     pict_type: Optional[str] = None
     coded_picture_number: Optional[int] = None
     stream_index: Optional[int] = None
-
-
-@dataclass(slots=True)
-class FrameData:
-    frame_id: int
-    pts: int
-    dts: Optional[int]
-    time: float
-    time_base: fractions.Fraction
 
 
 @dataclass
@@ -225,14 +214,14 @@ class FrameReader:
     def get_frame_count(self) -> int:
         return len(self.__frame_to_timestamp)
 
-    def get_frame(self, frame_id: int) -> np.ndarray:
+    def get_frame(self, frame_id: int) -> FrameReaderFrame:
         needs_seek = False
         if self.__last_decoded_frame:
             if frame_id == self.__last_decoded_frame.frame_id:
-                return self.__last_decoded_frame.frame
+                return self.__last_decoded_frame
 
             if self.__last_decoded_frame.frame_id + 1 == frame_id:
-                self.next_frame()
+                self.__next_frame()
             else:  # seek
                 needs_seek = True
         else:
@@ -242,9 +231,9 @@ class FrameReader:
             self.__seek(frame_id)
 
         assert self.__last_decoded_frame, "A frame needs to be decoded here"
-        return self.__last_decoded_frame.frame
+        return self.__last_decoded_frame
 
-    def next_frame(self) -> Tuple[np.ndarray, FrameData]:
+    def __next_frame(self) -> None:
         assert self.__video_container, "Video needs to be opened"
         assert self.__video_stream, "Video needs to be opened"
 
@@ -266,14 +255,6 @@ class FrameReader:
 
         assert self.__last_decoded_frame.frame_data.pts is not None, "We don't support None pts"
         assert self.__last_decoded_frame.frame_data.time is not None, "We don't support None frame time"
-        frame_data = FrameData(
-            frame_id=frame_id,
-            pts=self.__last_decoded_frame.frame_data.pts,
-            dts=self.__last_decoded_frame.frame_data.dts,
-            time=self.__last_decoded_frame.frame_data.time,
-            time_base=self.__last_decoded_frame.frame_data.time_base)
-
-        return (self.__last_decoded_frame.frame, frame_data)
 
     def __seek(self, frame_id: int) -> None:
         assert self.__video_container, "Video needs to be opened"
@@ -282,6 +263,7 @@ class FrameReader:
 
         found_frame = False
         for retry_seek in range(NB_SEEK_RETRIES):
+            logger.debug("Seeking to: %s", starting_frame_id)
             pkt_pts = self.__frame_to_timestamp[starting_frame_id].pkt_pts
             assert pkt_pts is not None, "We don't handle None pts"
 
@@ -293,7 +275,7 @@ class FrameReader:
                 self.__video_container.seek(pkt_pts, backward=True, any_frame=False, stream=self.__video_stream)
 
             while True:
-                self.next_frame()
+                self.__next_frame()
 
                 assert self.__last_decoded_frame, "Frame should have been decoded"
                 if self.__last_decoded_frame.frame_id == frame_id:
