@@ -135,6 +135,12 @@ def main() -> None:
                 right_undistorted = cv2.remap(right_frame.frame, mapx, mapy, cv2.INTER_LINEAR)
                 cv2.imwrite("left_undistorted.png", left_undistorted)
                 cv2.imwrite("right_undistorted.png", right_undistorted)
+
+                with open("offs.txt", "w") as f:
+                    print(f"Start offset: {start_offset}",  file=f)
+                    print(f"Left: {left_frame_idx-1}-{left_frame_idx}",  file=f)
+                    print(f"Right: {right_frame_idx-1}-{right_frame_idx}",  file=f)
+                    print(f"{right_frame_idx - left_frame_idx}",  file=f)
             elif key_movement.command == KeyCommands.LOCK:
                 lock_right = not lock_right
             elif key_movement.command == KeyCommands.MOVE:
