@@ -132,8 +132,8 @@ class FrameReader:
         # Players can use them in any order, so our frame_id -> pts is best effort and might not match the order used by players
         self.__pts_to_frame_id: DefaultDict[int, List[int]] = defaultdict(list)
 
-        self.__video_container: Optional[av.InputContainer] = None
-        self.__video_stream: Optional[av.Stream] = None
+        self.__video_container: Optional[av.InputContainer] = None  # type: ignore
+        self.__video_stream: Optional[av.Stream] = None  # type: ignore
 
         self.__last_decoded_frame: Optional[FrameReaderFrame] = None
         self.__first_frame_pts: int = -1 * sys.maxsize

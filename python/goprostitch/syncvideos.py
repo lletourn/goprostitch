@@ -1,5 +1,6 @@
 #!/bin/env python3
 import argparse
+import concurrent.futures
 import cv2
 from dataclasses import dataclass
 from enum import Enum
@@ -30,9 +31,9 @@ class KeyCommand:
 
 
 def get_movement() -> KeyCommand:
+    print("Command?")
     key = cv2.waitKeyEx()
 
-    print(f"Key: {key}")
     if key == 65361:  # Left
         return KeyCommand(command=KeyCommands.MOVE, frame_movement=-1)
     elif key == 65363:  # Right
@@ -88,77 +89,85 @@ def main() -> None:
     right_frame_idx = 0
     lock_right = False
     start_offset = 0
-    with FrameReader(left_video_filename, frame_skips_before_seek=59) as left_video, FrameReader(right_video_filename, frame_skips_before_seek=59) as right_video:
-        logger.info("Videos loaded...")
-        cv2.namedWindow("Left", cv2.WINDOW_NORMAL)
-        cv2.resizeWindow("Left", 1280, 720)
-        cv2.namedWindow("Right", cv2.WINDOW_NORMAL)
-        cv2.resizeWindow("Right", 1280, 720)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+        with FrameReader(left_video_filename, frame_skips_before_seek=59) as left_video, FrameReader(right_video_filename, frame_skips_before_seek=59) as right_video:
+            logger.info("Videos loaded...")
+            cv2.namedWindow("Left", cv2.WINDOW_NORMAL)
+            cv2.resizeWindow("Left", 1280, 720)
+            cv2.namedWindow("Right", cv2.WINDOW_NORMAL)
+            cv2.resizeWindow("Right", 1280, 720)
 
-        while True:
-            left_frame = left_video.get_frame(left_frame_idx)
-            right_frame = right_video.get_frame(right_frame_idx)
-            logger.info("Read frame: %s", left_frame.frame_id)
-            cv2.imshow("Left", left_frame.frame)
-            cv2.imshow("Right", right_frame.frame)
-            key_movement = get_movement()
+            while True:
+                future_tasks = (
+                                executor.submit(left_video.get_frame, left_frame_idx),
+                                executor.submit(right_video.get_frame, right_frame_idx)
+                                )
+                concurrent.futures.wait(future_tasks, timeout=None, return_when=concurrent.futures.ALL_COMPLETED)
+                left_frame = future_tasks[0].result()
+                right_frame = future_tasks[1].result()
+                # left_frame = left_video.get_frame(left_frame_idx)
+                # right_frame = right_video.get_frame(right_frame_idx)
+                logger.info("Read frame: %s", left_frame.frame_id)
+                cv2.imshow("Left", left_frame.frame)
+                cv2.imshow("Right", right_frame.frame)
+                key_movement = get_movement()
 
-            if key_movement.command == KeyCommands.QUIT:
-                break
-            elif key_movement.command == KeyCommands.LOCK:
-                lock_right = not lock_right
-            elif key_movement.command == KeyCommands.SAVE_START:
-                start_offset = min(left_frame_idx, right_frame_idx)
-            elif key_movement.command == KeyCommands.STATUS:
-                left_offset = 0
-                right_offset = 0
-                if right_frame_idx > left_frame_idx:
-                    right_offset = right_frame_idx - left_frame_idx
-                elif right_frame_idx < left_frame_idx:
-                    left_offset = left_frame_idx - right_frame_idx
-                print("Status:")
-                print(f"\tLeft Frame idx    : {left_frame_idx}")
-                print(f"\tRight Frame idx   : {right_frame_idx}")
-                print(f"\tRight Locked      : {lock_right}")
-                print(f"\tDelta             : {right_frame_idx - left_frame_idx}")
-                print(f"\tStart Offset      : {start_offset}")
-                print(f"\tLeft stitch start : {start_offset + left_offset}")
-                print(f"\tRight stitch start: {start_offset + right_offset}")
-            elif key_movement.command == KeyCommands.WRITE:
-                cv2.imwrite("left.png", left_frame.frame)
-                cv2.imwrite("right.png", right_frame.frame)
+                if key_movement.command == KeyCommands.QUIT:
+                    break
+                elif key_movement.command == KeyCommands.LOCK:
+                    lock_right = not lock_right
+                elif key_movement.command == KeyCommands.SAVE_START:
+                    start_offset = min(left_frame_idx, right_frame_idx)
+                elif key_movement.command == KeyCommands.STATUS:
+                    left_offset = 0
+                    right_offset = 0
+                    if right_frame_idx > left_frame_idx:
+                        right_offset = right_frame_idx - left_frame_idx
+                    elif right_frame_idx < left_frame_idx:
+                        left_offset = left_frame_idx - right_frame_idx
+                    print("Status:")
+                    print(f"\tLeft Frame idx    : {left_frame_idx}")
+                    print(f"\tRight Frame idx   : {right_frame_idx}")
+                    print(f"\tRight Locked      : {lock_right}")
+                    print(f"\tDelta             : {right_frame_idx - left_frame_idx}")
+                    print(f"\tStart Offset      : {start_offset}")
+                    print(f"\tLeft stitch start : {start_offset + left_offset}")
+                    print(f"\tRight stitch start: {start_offset + right_offset}")
+                elif key_movement.command == KeyCommands.WRITE:
+                    cv2.imwrite("left.png", left_frame.frame)
+                    cv2.imwrite("right.png", right_frame.frame)
 
-                h, w = left_frame.frame.shape[:2]
-                newcameramtx, roi = cv2.getOptimalNewCameraMatrix(K, distcoeffs, (w, h), 0, (w, h))
-                mapx, mapy = cv2.initUndistortRectifyMap(K, distcoeffs, None, newcameramtx, (w, h), 5)  # type: ignore
-                left_undistorted = cv2.remap(left_frame.frame, mapx, mapy, cv2.INTER_LINEAR)
-                right_undistorted = cv2.remap(right_frame.frame, mapx, mapy, cv2.INTER_LINEAR)
-                cv2.imwrite("left_undistorted.png", left_undistorted)
-                cv2.imwrite("right_undistorted.png", right_undistorted)
+                    h, w = left_frame.frame.shape[:2]
+                    newcameramtx, roi = cv2.getOptimalNewCameraMatrix(K, distcoeffs, (w, h), 0, (w, h))
+                    mapx, mapy = cv2.initUndistortRectifyMap(K, distcoeffs, None, newcameramtx, (w, h), 5)  # type: ignore
+                    left_undistorted = cv2.remap(left_frame.frame, mapx, mapy, cv2.INTER_LINEAR)
+                    right_undistorted = cv2.remap(right_frame.frame, mapx, mapy, cv2.INTER_LINEAR)
+                    cv2.imwrite("left_undistorted.png", left_undistorted)
+                    cv2.imwrite("right_undistorted.png", right_undistorted)
 
-                with open("offs.txt", "w") as f:
-                    print(f"Start offset: {start_offset}",  file=f)
-                    print(f"Left: {left_frame_idx-1}-{left_frame_idx}",  file=f)
-                    print(f"Right: {right_frame_idx-1}-{right_frame_idx}",  file=f)
-                    print(f"{right_frame_idx - left_frame_idx}",  file=f)
-            elif key_movement.command == KeyCommands.LOCK:
-                lock_right = not lock_right
-            elif key_movement.command == KeyCommands.MOVE:
-                if lock_right:
-                    left_frame_idx += key_movement.frame_movement
-                else:
-                    left_frame_idx += key_movement.frame_movement
-                    right_frame_idx += key_movement.frame_movement
+                    with open("offs.txt", "w") as f:
+                        print(f"Start offset: {start_offset}",  file=f)
+                        print(f"Left: {left_frame_idx-1}-{left_frame_idx}",  file=f)
+                        print(f"Right: {right_frame_idx-1}-{right_frame_idx}",  file=f)
+                        print(f"{right_frame_idx - left_frame_idx}",  file=f)
+                elif key_movement.command == KeyCommands.LOCK:
+                    lock_right = not lock_right
+                elif key_movement.command == KeyCommands.MOVE:
+                    if lock_right:
+                        left_frame_idx += key_movement.frame_movement
+                    else:
+                        left_frame_idx += key_movement.frame_movement
+                        right_frame_idx += key_movement.frame_movement
 
-                if left_frame_idx < 0:
-                    left_frame_idx = 0
-                elif left_frame_idx > left_video.get_frame_count():
-                    left_frame_idx = left_video.get_frame_count() - 1
+                    if left_frame_idx < 0:
+                        left_frame_idx = 0
+                    elif left_frame_idx > left_video.get_frame_count():
+                        left_frame_idx = left_video.get_frame_count() - 1
 
-                if right_frame_idx < 0:
-                    right_frame_idx = 0
-                elif right_frame_idx > right_video.get_frame_count():
-                    right_frame_idx = right_video.get_frame_count() - 1
+                    if right_frame_idx < 0:
+                        right_frame_idx = 0
+                    elif right_frame_idx > right_video.get_frame_count():
+                        right_frame_idx = right_video.get_frame_count() - 1
 
 
 if __name__ == '__main__':
