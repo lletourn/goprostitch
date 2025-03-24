@@ -26,6 +26,10 @@ add_executable(${PROJECT_NAME} ${CMAKE_SOURCE_DIR}/src/main.cpp ${CMAKE_SOURCE_D
 set_property(TARGET ${PROJECT_NAME} PROPERTY CXX_STANDARD 17)
 target_link_libraries(${PROJECT_NAME} PRIVATE PkgConfig::LIBAV PkgConfig::FFNVCODEC ${OpenCV_LIBS} spdlog::spdlog)
 
+add_executable(warpthreadbug ${CMAKE_SOURCE_DIR}/src/warpthreadbug.cpp)
+set_property(TARGET warpthreadbug PROPERTY CXX_STANDARD 17)
+target_link_libraries(warpthreadbug PRIVATE ${OpenCV_LIBS})
+
 add_executable(gpuenctst ${CMAKE_SOURCE_DIR}/src/gpuenctst.cpp)
 set_property(TARGET gpuenctst PROPERTY CXX_STANDARD 17)
 target_link_libraries(gpuenctst PRIVATE PkgConfig::LIBAV PkgConfig::FFNVCODEC ${OpenCV_LIBS} spdlog::spdlog)

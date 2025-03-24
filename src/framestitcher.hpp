@@ -17,7 +17,7 @@ class FrameStitcher {
     static void MatchHistograms(cv::Mat& image, const std::vector<std::vector<double>>& reference_bgr_cumsum, const std::vector<std::vector<uint32_t>>& reference_bgr_value_idxs);
     static void interp(const std::vector<double>& x, const std::vector<double>& xp, const std::vector<uint32_t>& yp, std::vector<uint8_t>& y);
 
-    FrameStitcher(uint32_t crop_offset_x, uint32_t crop_offset_y, uint32_t crop_width, uint32_t crop_height, ThreadSafeQueue<LeftRightPacket>& stitcher_queue, ThreadSafeQueue<PanoramicPacket>& output_queue, std::vector<cv::detail::CameraParams> camera_params, const cv::Mat camera_intrinsic_K, const cv::Mat camera_intrinsic_distortion_coefficients, const cv::Size calibration_image_size, const std::vector<cv::UMat>& image_masks, const std::vector<std::vector<uint32_t>>& reference_bgr_value_idxs, const std::vector<std::vector<double>>& reference_bgr_cumsum);
+    FrameStitcher(bool use_gpu, uint32_t crop_offset_x, uint32_t crop_offset_y, uint32_t crop_width, uint32_t crop_height, ThreadSafeQueue<LeftRightPacket>& stitcher_queue, ThreadSafeQueue<PanoramicPacket>& output_queue, std::vector<cv::detail::CameraParams> camera_params, const cv::Mat camera_intrinsic_K, const cv::Mat camera_intrinsic_distortion_coefficients, const cv::Size calibration_image_size, const std::vector<cv::UMat>& image_masks, const std::vector<std::vector<uint32_t>>& reference_bgr_value_idxs, const std::vector<std::vector<double>>& reference_bgr_cumsum);
     ~FrameStitcher();
 
     void set_input_pixel_format(PixelFormat input_pix_fmt);
@@ -29,6 +29,7 @@ class FrameStitcher {
     void close();
 
  private:
+    bool use_gpu_;
     bool match_histogram_;
     uint32_t crop_offset_x_;
     uint32_t crop_offset_y_;

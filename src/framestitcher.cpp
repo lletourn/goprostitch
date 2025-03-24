@@ -123,6 +123,7 @@ void FrameStitcher::MatchHistograms(Mat& image, const std::vector<std::vector<do
 
 
 FrameStitcher::FrameStitcher(
+    bool use_gpu,
     uint32_t crop_offset_x,
     uint32_t crop_offset_y,
     uint32_t crop_width,
@@ -136,7 +137,8 @@ FrameStitcher::FrameStitcher(
     const vector<UMat>& image_masks,
     const vector<vector<uint32_t>>& reference_bgr_value_idxs,
     const vector<vector<double>>& reference_bgr_cumsum)
-: match_histogram_(false),
+: use_gpu_(use_gpu),
+  match_histogram_(false),
   crop_offset_x_(crop_offset_x),
   crop_offset_y_(crop_offset_y),
   crop_width_(crop_width),
@@ -212,7 +214,7 @@ void FrameStitcher::run() {
     initUndistortRectifyMap(camera_intrinsic_K_, camera_intrinsic_distortion_coefficients_, Mat(), optimized_camera_matrix, calibration_image_size_,  CV_16SC2, map1, map2);
 
     vector<Size> image_sizes = {calibration_image_size_, calibration_image_size_};
-    ImageCompositing compositor(false, camera_params_, image_masks_, image_sizes);
+    ImageCompositing compositor(false, use_gpu_, camera_params_, image_masks_, image_sizes);
 
     Mat tmp_left;
     Mat tmp_right;
@@ -253,7 +255,7 @@ void FrameStitcher::run() {
                 MatchHistograms(images[1], reference_bgr_cumsum_, reference_bgr_value_idxs_);
 
             spdlog::trace("[framestitching] Composing");
-            compositor.compose(images, panoramic_image);
+            compositor.compose(images, panoramic_image, left_right_packet->idx);
             spdlog::trace("[framestitching] Composed");
 
             Mat cropped_image(panoramic_image, Range(crop_offset_y_, crop_offset_y_+crop_height_), Range(crop_offset_x_, crop_offset_x_+crop_width_));

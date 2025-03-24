@@ -24,8 +24,8 @@ float compute_warped_image_scale(const vector<CameraParams>& cameras) {
     return warped_image_scale;
 }
 
-ImageCompositing::ImageCompositing(bool do_blending, const vector<cv::detail::CameraParams>& cameras, const std::vector<cv::UMat>& masks_warped, const vector<Size> images_size)
-: do_blending_(do_blending), cameras_parameters_(cameras), blending_masks_(masks_warped.size()), corners_(cameras.size()), sizes_(cameras.size()), top_left_(numeric_limits<int32_t>::max(), numeric_limits<int32_t>::  max()) {
+ImageCompositing::ImageCompositing(bool do_blending, bool use_gpu, const vector<cv::detail::CameraParams>& cameras, const std::vector<cv::UMat>& masks_warped, const vector<Size> images_size)
+: do_blending_(do_blending), use_gpu_(use_gpu), cameras_parameters_(cameras), blending_masks_(masks_warped.size()), corners_(cameras.size()), sizes_(cameras.size()), top_left_(numeric_limits<int32_t>::max(), numeric_limits<int32_t>::  max()) {
 
     if (do_blending_)
         spdlog::info("[compositing] Using multiband blending");
@@ -33,8 +33,12 @@ ImageCompositing::ImageCompositing(bool do_blending, const vector<cv::detail::Ca
         spdlog::info("[compositing] Blending disabled");
 
     float warped_image_scale = compute_warped_image_scale(cameras);
-    Ptr<WarperCreator> warper_creator = makePtr<cv::CylindricalWarper>();
-    // Ptr<WarperCreator> warper_creator = makePtr<cv::CylindricalWarperGpu>();  Can't use GPU causes weird warping artifacts
+    Ptr<WarperCreator> warper_creator;
+
+    if (use_gpu_)
+        warper_creator = makePtr<cv::CylindricalWarperGpu>();
+    else
+        warper_creator = makePtr<cv::CylindricalWarper>();
     if (!warper_creator) {
         throw runtime_error("Can't create the Cylindrical warper");
     }
@@ -48,7 +52,8 @@ ImageCompositing::ImageCompositing(bool do_blending, const vector<cv::detail::Ca
 
         Mat K;
         cameras[i].K().convertTo(K, CV_32F);
-        Rect roi = warper_->warpRoi(sz, K, cameras[i].R);
+        K_CV_32Fs_.push_back(K);
+        Rect roi = warper_->warpRoi(sz, K_CV_32Fs_[i], cameras[i].R);
         corners_[i] = roi.tl();
         sizes_[i] = roi.size();
     }
@@ -80,12 +85,10 @@ ImageCompositing::ImageCompositing(bool do_blending, const vector<cv::detail::Ca
             panoramic_image_size_.width = br.x - top_left_.x;
             panoramic_image_size_.height = br.y - top_left_.y;
         } else {
-            Mat K;
-            cameras[img_idx].K().convertTo(K, CV_32F);
             // Warp the current image mask
             mask.create(images_size[img_idx], CV_8U);
             mask.setTo(Scalar::all(255));
-            warper_->warp(mask, K, cameras[img_idx].R, INTER_NEAREST, BORDER_CONSTANT, mask_warped);
+            warper_->warp(mask, K_CV_32Fs_[img_idx], cameras[img_idx].R, INTER_NEAREST, BORDER_CONSTANT, mask_warped);
             dilate(masks_warped[img_idx], dilated_mask, Mat());
             resize(dilated_mask, seam_mask, mask_warped.size(), 0, 0, INTER_LINEAR_EXACT);
             blending_masks_[img_idx] = seam_mask & mask_warped;
@@ -97,8 +100,7 @@ ImageCompositing::ImageCompositing(bool do_blending, const vector<cv::detail::Ca
 ImageCompositing::~ImageCompositing() {
 }
   
-void ImageCompositing::compose(const vector<Mat>& images, Mat& output_image) {
-
+void ImageCompositing::compose(const vector<Mat>& images, Mat& output_image, int32_t frame_idx) {
     spdlog::trace("[compositing] Start");
     int num_images = static_cast<int>(images.size());
     vector<Mat> full_imgs(num_images);
@@ -123,19 +125,22 @@ void ImageCompositing::compose(const vector<Mat>& images, Mat& output_image) {
     bool is_compose_scale_set = false;
     double compose_scale = 1;
 
-    // for (int img_idx = 0; img_idx < num_images; ++img_idx) {
     for (int img_idx = num_images-1; img_idx >= 0; --img_idx) {
         spdlog::trace("[compositing] [{}] Loop start", img_idx);
         // Read image and resize it if necessary
         img = full_imgs[img_idx];
         Size img_size = img.size();
 
-        Mat K;
-        cameras_parameters_[img_idx].K().convertTo(K, CV_32F);
-
         spdlog::trace("[compositing] [{}] Converted to float", img_idx);
-        // Warp the current image
-        warper_->warp(img, K, cameras_parameters_[img_idx].R, INTER_LINEAR, BORDER_REFLECT, img_warped);
+        if (use_gpu_) {
+            // Need a lock guard because warp is NOT thread safe on GPU.
+            lock_guard<mutex> lock(ImageCompositing::single_warp_mutex_);
+            // Warp the current image
+            warper_->warp(img, K_CV_32Fs_[img_idx], cameras_parameters_[img_idx].R, INTER_LINEAR, BORDER_REFLECT, img_warped);
+        } else {
+            warper_->warp(img, K_CV_32Fs_[img_idx], cameras_parameters_[img_idx].R, INTER_LINEAR, BORDER_REFLECT, img_warped);
+        }
+
         spdlog::trace("[compositing] [{}] Image warped", img_idx);
         if(!do_blending_) {
             Mat roi_to_fill(pano_img, cv::Rect(corners_[img_idx].x-top_left_.x, corners_[img_idx].y-top_left_.y, img_warped.cols, img_warped.rows));

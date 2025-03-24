@@ -33,7 +33,7 @@ class InputProcessor {
     AVColorRange color_range() {return color_range_;};
     double duration() {return duration_;};
     // Pointer is owned by this class
-    const AVCodecParameters* audio_codec_parameters() {return av_format_ctx_->streams[audio_stream_]->codecpar;};
+    const AVCodecParameters* audio_codec_parameters() {return av_format_ctx_->streams[audio_stream_idx_]->codecpar;};
     
     ThreadSafeQueue<VideoPacket>& getOutVideoQueue();
     ThreadSafeQueue<AVPacket, PacketDeleter>& getOutAudioQueue();
@@ -63,7 +63,7 @@ class InputProcessor {
     AVCodecContext* video_codec_ctx_;
     const AVCodec* video_codec_;
     AVBufferRef *hw_device_ctx_;
-    int video_stream_;
-    int audio_stream_;
+    int video_stream_idx_;
+    int audio_stream_idx_;
 
 };

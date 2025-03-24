@@ -117,7 +117,7 @@ int main(int argc, const char ** argv) {
 
     ThreadSafeQueue<PanoramicPacket> panoramic_packet_queue(input_queue_size);
     vector<unique_ptr<FrameStitcher>> frame_stitchers;
-    unique_ptr<FrameStitcher> fs(new FrameStitcher(pano_offset_x, pano_offset_y, pano_width, pano_height, stitcher_queue, panoramic_packet_queue, cameras_params, camera_intrinsics_K, camera_intrinsics_distortion_coefficients, camera_intrinsics_image_size_used, masks_warped, reference_bgr_value_idxs, reference_bgr_cumsum));
+    unique_ptr<FrameStitcher> fs(new FrameStitcher(false, pano_offset_x, pano_offset_y, pano_width, pano_height, stitcher_queue, panoramic_packet_queue, cameras_params, camera_intrinsics_K, camera_intrinsics_distortion_coefficients, camera_intrinsics_image_size_used, masks_warped, reference_bgr_value_idxs, reference_bgr_cumsum));
     fs->start();
     frame_stitchers.push_back(move(fs));
 

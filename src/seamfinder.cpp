@@ -177,7 +177,7 @@ int main(int argc, char* argv[]) {
     }
 
     Mat output_image;
-    ImageCompositing compositor(false, cameras, masks_warped, images_size);
+    ImageCompositing compositor(true, false, cameras, masks_warped, images_size);
     spdlog::info("Pre compo");
     compositor.compose(images, output_image);
     spdlog::info("Compo");

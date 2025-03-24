@@ -113,11 +113,19 @@ void InputProcessor::initialize() {
         }
     }
 
-    int ret = avformat_open_input(&av_format_ctx_, filename_.c_str(), NULL, NULL);
+    // To get the udat gopro specific fields.
+    AVDictionary* opt = nullptr;
+    av_dict_set(&opt, "export_all", "1", 0);
+    int ret = avformat_open_input(&av_format_ctx_, filename_.c_str(), NULL, &opt);
     if (ret < 0) {
         // couldn't open file
         spdlog::error("Could not open file: {} ", filename_);
         throw runtime_error("Could not open file");
+    }
+    AVDictionaryEntry *e;
+    if (e = av_dict_get(opt, "", NULL, AV_DICT_IGNORE_SUFFIX)) {
+        spdlog::error("Option {} not recognized by the demuxer.", e->key);
+        throw runtime_error("Option not recognized by the demuxer.");
     }
 
     ret = avformat_find_stream_info(av_format_ctx_, NULL);
@@ -131,7 +139,7 @@ void InputProcessor::initialize() {
 
     for (uint32_t i = 0; i < av_format_ctx_->nb_streams; i++) {
         if (av_format_ctx_->streams[i]->codecpar->codec_type == AVMEDIA_TYPE_VIDEO) {
-            video_stream_ = i;
+            video_stream_idx_ = i;
 
             duration_ = (double)av_format_ctx_->streams[i]->duration * av_q2d(av_format_ctx_->streams[i]->time_base);
             if(av_format_ctx_->streams[i]->codecpar->sample_aspect_ratio.num != 1 || av_format_ctx_->streams[i]->codecpar->sample_aspect_ratio.den != 1) {
@@ -141,12 +149,12 @@ void InputProcessor::initialize() {
 
             video_time_base_ = Rational(av_format_ctx_->streams[i]->time_base.num, av_format_ctx_->streams[i]->time_base.den);
         } else if (av_format_ctx_->streams[i]->codecpar->codec_type == AVMEDIA_TYPE_AUDIO) {
-            audio_stream_ = i;
+            audio_stream_idx_ = i;
             audio_time_base_ = Rational(av_format_ctx_->streams[i]->time_base.num, av_format_ctx_->streams[i]->time_base.den);
         }
     }
 
-    video_codec_ = avcodec_find_decoder(av_format_ctx_->streams[video_stream_]->codecpar->codec_id);
+    video_codec_ = avcodec_find_decoder(av_format_ctx_->streams[video_stream_idx_]->codecpar->codec_id);
     if (video_codec_ == NULL) {
         spdlog::error("Unsupported video codec!");
         throw runtime_error("Unsupported video codec");
@@ -174,7 +182,7 @@ void InputProcessor::initialize() {
         throw runtime_error("Error occured");
     }
 
-    ret = avcodec_parameters_to_context(video_codec_ctx_, av_format_ctx_->streams[video_stream_]->codecpar);
+    ret = avcodec_parameters_to_context(video_codec_ctx_, av_format_ctx_->streams[video_stream_idx_]->codecpar);
     if (ret != 0) {
         spdlog::error("Could not copy video codec context.");
         throw runtime_error("Error occured");
@@ -191,7 +199,7 @@ void InputProcessor::initialize() {
     }
     colorspace_ = video_codec_ctx_->colorspace;
     color_range_ = video_codec_ctx_->color_range;
-    video_frame_rate_ = Rational(av_format_ctx_->streams[video_stream_]->r_frame_rate.num, av_format_ctx_->streams[video_stream_]->r_frame_rate.den);
+    video_frame_rate_ = Rational(av_format_ctx_->streams[video_stream_idx_]->r_frame_rate.num, av_format_ctx_->streams[video_stream_idx_]->r_frame_rate.den);
     video_codec_ctx_->thread_type = FF_THREAD_FRAME;
     video_codec_ctx_->thread_count = 1;
 
@@ -200,6 +208,12 @@ void InputProcessor::initialize() {
         spdlog::error("Could not open video codec.\n");
         throw runtime_error("Error occured");
     }
+
+    // Print the udat, container, metadata. GPMF contains the gopro data but we are missing the size...
+    // const AVDictionaryEntry *tag = NULL;
+    // while ((tag = av_dict_iterate(av_format_ctx_->metadata, tag))) {
+    //     cout << "Key: " << tag->key << " Value: " << tag->value << endl;
+    // }
 }
 
 void InputProcessor::run() {
@@ -228,7 +242,7 @@ void InputProcessor::run() {
     AVFrame *tmp_frame = nullptr;
     AVFrame *sw_frame = nullptr;
     while (av_read_frame(av_format_ctx_, packet) >= 0 && running_.load() == true) {
-        if (packet->stream_index == video_stream_) {
+        if (packet->stream_index == video_stream_idx_) {
             chrono::steady_clock::time_point video_start = chrono::steady_clock::now();
             ret = avcodec_send_packet(video_codec_ctx_, packet);
             if (ret < 0) {
@@ -303,7 +317,8 @@ void InputProcessor::run() {
                     input_packet->width = video_codec_ctx_->width;
                     input_packet->height = video_codec_ctx_->height;
                     input_packet->pts = tmp_frame->pts;
-                    input_packet->pts_time =  tmp_frame->pts * av_q2d(tmp_frame->time_base);
+                    spdlog::debug("Time: {}", tmp_frame->pts * av_q2d(av_format_ctx_->streams[video_stream_idx_]->time_base));
+                    input_packet->pts_time =  tmp_frame->pts * av_q2d(av_format_ctx_->streams[video_stream_idx_]->time_base);
                     input_packet->idx = video_idx-offset_;
                     input_packet->data_size = output_frame_size;
                     input_packet->data = move(data);
@@ -328,7 +343,7 @@ void InputProcessor::run() {
                 av_frame_free(&sw_frame);
                 sw_frame = nullptr;
             }
-        } else if (packet->stream_index == audio_stream_) {
+        } else if (packet->stream_index == audio_stream_idx_) {
             AVPacket* audio_packet = av_packet_alloc();
             if (audio_packet == NULL) {
                 spdlog::error("Could not alloc packet,");
@@ -344,14 +359,14 @@ void InputProcessor::run() {
                     while(!audio_buffer->empty()) {
                         AVPacketUniquePTR old_packet(move(audio_buffer->front()));
                         audio_buffer->pop();
-                        double old_packet_timestamp = old_packet->pts * av_q2d(av_format_ctx_->streams[audio_stream_]->time_base);
+                        double old_packet_timestamp = old_packet->pts * av_q2d(av_format_ctx_->streams[audio_stream_idx_]->time_base);
                         if(old_packet_timestamp >= start_timestamp) {
                             audio_packet_queue_.push(move(old_packet));
                         }
                     }
                     audio_buffer.reset(nullptr);
                 }
-                double packet_timestamp = p->pts * av_q2d(av_format_ctx_->streams[audio_stream_]->time_base);
+                double packet_timestamp = p->pts * av_q2d(av_format_ctx_->streams[audio_stream_idx_]->time_base);
                 if(packet_timestamp >= start_timestamp)
                     audio_packet_queue_.push(move(p));
             }

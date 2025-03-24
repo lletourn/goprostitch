@@ -100,7 +100,7 @@ void process_videos(
 
     vector<unique_ptr<FrameStitcher>> frame_stitchers;
     for(uint16_t i=0; i < nb_stitch_workers; ++i) {
-        unique_ptr<FrameStitcher> fs(new FrameStitcher(pano_offset_x, pano_offset_y, pano_width, pano_height, stitcher_queue, output_encoder.getInPanoramicQueue(), cameras_params, camera_intrinsics_K, camera_intrinsics_distortion_coefficients, camera_intrinsics_image_size_used, masks_warped, reference_bgr_value_idxs, reference_bgr_cumsum));
+        unique_ptr<FrameStitcher> fs(new FrameStitcher(use_gpu, pano_offset_x, pano_offset_y, pano_width, pano_height, stitcher_queue, output_encoder.getInPanoramicQueue(), cameras_params, camera_intrinsics_K, camera_intrinsics_distortion_coefficients, camera_intrinsics_image_size_used, masks_warped, reference_bgr_value_idxs, reference_bgr_cumsum));
         fs->start();
         frame_stitchers.push_back(move(fs));
     }
