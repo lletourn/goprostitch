@@ -296,6 +296,8 @@ void OutputEncoder::run() {
     double prev_delta = 0;
     double read_left_audio = std::numeric_limits<double>::max();
     double read_right_audio = std::numeric_limits<double>::max();
+    int64_t read_left_audio_pts = -1;
+    int64_t read_right_audio_pts = -1;
     while(running_) {
         spdlog::debug("[outputenc] Process packets");
         while(true) {
@@ -303,10 +305,13 @@ void OutputEncoder::run() {
             if(audio_packet) {
                 spdlog::trace("[outputenc] Got left audio packet");
                 double pts_time = audio_packet->pts * av_q2d(left_audio_stream_->time_base);
+                int64_t pts = audio_packet->pts;
                 if(use_left_audio_ || pts_time >= read_right_audio)
                     left_audio_packets_.push(move(audio_packet));
-                if(read_left_audio == std::numeric_limits<double>::max())
+                if(read_left_audio == std::numeric_limits<double>::max()) {
                     read_left_audio = pts_time;
+                    read_left_audio_pts = pts;
+                }
             } else {
                 break;
             }
@@ -316,10 +321,13 @@ void OutputEncoder::run() {
             if(audio_packet) {
                 spdlog::trace("[outputenc] Got right audio packet");
                 double pts_time = audio_packet->pts * av_q2d(left_audio_stream_->time_base);
+                int64_t pts = audio_packet->pts;
                 if(!use_left_audio_ || pts_time >= read_left_audio)
                     right_audio_packets_.push(move(audio_packet));
-                if(read_right_audio == std::numeric_limits<double>::max())
+                if(read_right_audio == std::numeric_limits<double>::max()) {
                     read_right_audio = pts_time;
+                    read_right_audio_pts = pts;
+                }
             } else {
                 break;
             }
@@ -340,7 +348,7 @@ void OutputEncoder::run() {
                 spdlog::trace("[outputenc] Writing left audio packet. VideoPacketPtsTime: {} LeftAudioPtsTime: {}", current_panoramic_packet->pts_time, left_audio_packets_.front()->pts * av_q2d(left_audio_stream_->time_base));
                 // Passthru audio
                 unique_ptr<AVPacket, PacketDeleter> audio_packet(move(left_audio_packets_.front()));
-                write_audio(audio_packet.get(), left_audio_stream_);
+                write_audio(audio_packet.get(), left_audio_stream_, read_left_audio_pts);
 
                 left_audio_packets_.pop();
                 audio_packet.reset();
@@ -348,7 +356,7 @@ void OutputEncoder::run() {
             while(!right_audio_packets_.empty() && (right_audio_packets_.front()->pts * av_q2d(right_audio_stream_->time_base)) <= current_panoramic_packet->pts_time) {
                 spdlog::trace("[outputenc] Writing right audio packet. VideoPacketPtsTime: {} RightAudioPtsTime: {}", current_panoramic_packet->pts_time, right_audio_packets_.front()->pts * av_q2d(right_audio_stream_->time_base));
                 unique_ptr<AVPacket, PacketDeleter> audio_packet(move(right_audio_packets_.front()));
-                write_audio(audio_packet.get(), right_audio_stream_);
+                write_audio(audio_packet.get(), right_audio_stream_, read_right_audio_pts);
 
                 right_audio_packets_.pop();
                 audio_packet.reset();
@@ -462,9 +470,11 @@ void OutputEncoder::run() {
     done_ = true;
 }
 
-void OutputEncoder::write_audio(AVPacket* packet, AVStream* audio_stream) {
+void OutputEncoder::write_audio(AVPacket* packet, AVStream* audio_stream, int64_t first_read_audio_ts) {
     packet->stream_index = audio_stream->index;
     int r = AV_ROUND_NEAR_INF | AV_ROUND_PASS_MINMAX;
+    packet->pts -= first_read_audio_ts;
+    packet->dts -= first_read_audio_ts;
     packet->pts = av_rescale_q_rnd(packet->pts, audio_time_base_, audio_stream->time_base, (AVRounding)r);
     packet->dts = av_rescale_q_rnd(packet->dts, audio_time_base_, audio_stream->time_base, (AVRounding)r);
     packet->duration = av_rescale_q(packet->duration, audio_time_base_, audio_stream->time_base);

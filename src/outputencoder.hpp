@@ -28,7 +28,7 @@ class OutputEncoder {
  private:
     AVStream* init_audio(const AVCodecParameters* audio_codec_parameters, const char* title);
     void init_video();
-    void write_audio(AVPacket* packet, AVStream* audio_stream);
+    void write_audio(AVPacket* packet, AVStream* audio_stream, int64_t first_read_audio_ts);
 
  private:
     const std::string filename_;
