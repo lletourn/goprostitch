@@ -181,6 +181,10 @@ void process_videos(
         frame_stitcher->stop();
     }
 
+    spdlog::info("Waiting for output encoder to be done...");
+    while(output_encoder.getInPanoramicQueue().size() > 0)
+        this_thread::sleep_for(chrono::seconds(1));
+
     spdlog::info("Stopping output encoder...");
     output_encoder.stop();
     camera_intrinsics_K.release();
