@@ -6,12 +6,25 @@ from dataclasses import dataclass
 from enum import Enum
 import json
 import logging
+import multiprocessing
 import numpy
 import sys
 
 from goprostitch.framereader import FrameReader
 
 logger = logging.getLogger(__name__)
+
+
+def process_video(video_filename: str, crop_l: int, crop_r: int, crop_t: int, crop_b: int, queue: multiprocessing.Queue) -> None:
+    frame_id = 0
+    with FrameReader(video_filename, frame_skips_before_seek=59) as video:
+        while True:
+            frame = video.get_frame(frame_id)
+            crop_rgb = frame.frame[crop_t:crop_b, crop_l:crop_r]
+            crop_gray = cv2.cvtColor(crop_rgb, cv2.COLOR_BGR2GRAY)
+
+            queue.put((frame_id, crop_gray.copy()), block=True, timeout=None)
+            frame_id += 1
 
 
 def main() -> None:
@@ -28,76 +41,78 @@ def main() -> None:
     left_video_filename = args.left
     right_video_filename = args.right
 
-    frame_id = 0
+    left_q: multiprocessing.Queue = multiprocessing.Queue(maxsize=200)
+    right_q: multiprocessing.Queue = multiprocessing.Queue(maxsize=200)
+
+    left_process = multiprocessing.Process(target=process_video, args=(left_video_filename, 3050, 3058, 355, 369, left_q), daemon=True)
+    right_process = multiprocessing.Process(target=process_video, args=(right_video_filename, 938, 949, 400, 413, right_q), daemon=True)
+    left_process.start()
+    right_process.start()
+
     prev_left_crop = None
     prev_right_crop = None
 
-    # left, right, top, bottom
-    left_rect = [3050, 3058, 355, 369]
-    right_rect = [940, 949, 400, 413]
-    with FrameReader(left_video_filename, frame_skips_before_seek=59) as left_video, FrameReader(right_video_filename, frame_skips_before_seek=59) as right_video:
-        logger.info("Videos loaded...")
-        # cv2.namedWindow("Left", cv2.WINDOW_NORMAL)
-        # cv2.resizeWindow("Left", 200, 200)
-        # cv2.moveWindow("Left", 20, 20)
+    # cv2.namedWindow("Left", cv2.WINDOW_NORMAL)
+    # cv2.resizeWindow("Left", 200, 200)
+    # cv2.moveWindow("Left", 20, 20)
 
-        # cv2.namedWindow("Right", cv2.WINDOW_NORMAL)
-        # cv2.resizeWindow("Right", 200, 200)
-        # cv2.moveWindow("Right", 500, 20)
+    # cv2.namedWindow("Right", cv2.WINDOW_NORMAL)
+    # cv2.resizeWindow("Right", 200, 200)
+    # cv2.moveWindow("Right", 500, 20)
 
-        # cv2.namedWindow("Left Diff", cv2.WINDOW_NORMAL)
-        # cv2.resizeWindow("Left Diff", 200, 200)
-        # cv2.moveWindow("Left Diff", 20, 500)
+    # cv2.namedWindow("Left Diff", cv2.WINDOW_NORMAL)
+    # cv2.resizeWindow("Left Diff", 200, 200)
+    # cv2.moveWindow("Left Diff", 20, 500)
 
-        # cv2.namedWindow("Right Diff", cv2.WINDOW_NORMAL)
-        # cv2.resizeWindow("Right Diff", 200, 200)
-        # cv2.moveWindow("Right Diff", 500, 500)
-            
-        while True:
-            left_frame = left_video.get_frame(frame_id)
-            right_frame = right_video.get_frame(frame_id)
+    # cv2.namedWindow("Right Diff", cv2.WINDOW_NORMAL)
+    # cv2.resizeWindow("Right Diff", 200, 200)
+    # cv2.moveWindow("Right Diff", 500, 500)
+    
+    while True:
+        left_frame_id, left_crop = left_q.get()
+        right_frame_id, right_crop = right_q.get()
 
-            # copy to make continuous
-            left_crop = left_frame.frame[left_rect[2]:left_rect[3], left_rect[0]:left_rect[1]].copy()
-            right_crop = right_frame.frame[right_rect[2]:right_rect[3], right_rect[0]:right_rect[1]].copy()
-            left_crop = cv2.cvtColor(left_crop, cv2.COLOR_BGR2GRAY)
-            right_crop = cv2.cvtColor(right_crop, cv2.COLOR_BGR2GRAY)
+        must_wait = False
+        if prev_left_crop is not None and prev_right_crop is not None:
+            left_norm = cv2.norm(left_crop, prev_left_crop, cv2.NORM_L2)
+            left_diff = cv2.absdiff(left_crop, prev_left_crop)
+            right_norm = cv2.norm(right_crop, prev_right_crop, cv2.NORM_L2)
+            right_diff = cv2.absdiff(right_crop, prev_right_crop)
+            # if left_norm > 150 or right_norm > 150:
+            logger.debug("Queue sizes: L=%s  R=%s", left_q.qsize(), right_q.qsize())
+            logger.info(f"Fl: {left_frame_id} Fr: {right_frame_id} L: {left_norm} R: {right_norm} La: {left_diff.sum()} Ra: {right_diff.sum()}")
 
-            if prev_left_crop is not None and prev_right_crop is not None:
-                left_norm = cv2.norm(left_crop, prev_left_crop, cv2.NORM_L2)
-                left_diff = cv2.absdiff(left_crop, prev_left_crop)
-                right_norm = cv2.norm(right_crop, prev_right_crop, cv2.NORM_L2)
-                right_diff = cv2.absdiff(right_crop, prev_right_crop)
-                
-                logger.info(f"F: {frame_id} L: {left_norm} R: {right_norm} La: {left_diff.sum()} Ra: {right_diff.sum()}")
-                must_wait = False
-                if left_norm > 200:
-                    cv2.imwrite(f"left-{frame_id}.jpg", left_crop)
-                    cv2.imwrite(f"leftdiff-{frame_id}.jpg", left_diff)
-                    # cv2.imshow("Left", left_crop)
-                    # cv2.imshow("Left Diff", left_diff)
-                    # must_wait = True
-                elif right_norm > 200:
-                    cv2.imwrite(f"right-{frame_id}.jpg", right_crop)
-                    cv2.imwrite(f"rightdiff-{frame_id}.jpg", right_diff)
-                    # cv2.imshow("Right", right_crop)
-                    # cv2.imshow("Right Diff", right_diff)
-                    # must_wait = True
-            else:
+            if left_norm > 200:
+                left_out = numpy.concatenate((prev_left_crop, left_crop), axis=1)
+                cv2.imwrite(f"left-{left_frame_id}.jpg", left_out)
+                cv2.imwrite(f"leftdiff-{left_frame_id}-{int(left_norm)}.jpg", left_diff)
                 # cv2.imshow("Left", left_crop)
-                # cv2.imshow("Right", right_crop)
+                # cv2.imshow("Left Diff", left_diff)
                 # must_wait = True
-                pass
-            if must_wait:
-                key = cv2.waitKey(1)
-                if key == ord('q') or key == ord('Q'):
-                    break
+            if right_norm > 200:
+                right_out = numpy.concatenate((prev_right_crop, right_crop), axis=1)
+                cv2.imwrite(f"right-{right_frame_id}.jpg", right_out)
+                cv2.imwrite(f"rightdiff-{right_frame_id}-{int(right_norm)}.jpg", right_diff)
+                # cv2.imshow("Right", right_crop)
+                # cv2.imshow("Right Diff", right_diff)
+                # must_wait = True
+        else:
+            # cv2.imshow("Left", left_crop)
+            # cv2.imshow("Right", right_crop)
+            # must_wait = True
+            pass
 
-            prev_left_crop = left_crop
-            prev_right_crop = right_crop
-            frame_id += 1
+        if must_wait:
+            key = cv2.waitKey(1)
+            if key == ord('q') or key == ord('Q'):
+                break
 
-        cv2.destroyAllWindows()
+        prev_left_crop = left_crop
+        prev_right_crop = right_crop
+    left_process.join()
+    right_process.join()
+
+    cv2.destroyAllWindows()
 
 
 if __name__ == '__main__':

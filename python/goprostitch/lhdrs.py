@@ -104,8 +104,13 @@ def build_request(game: Game, game_start: int, game_end: int, left_goalie_team: 
     game_request["requestDetails"]["game"]["league"] = {"leagueRefId": "LHDRS", "name": "LHDRS"}
 
     game_request["requestDetails"]["timestamps"] = []
-    game_request["requestDetails"]["timestamps"].append({"mediaRefId": "A", "videoTimeMS": float(game_start) * 1000.0, "type": "gameStart", "period": 1, "leftSideGoalTeam": left_goalie_team})
-    game_request["requestDetails"]["timestamps"].append({"mediaRefId": "A", "videoTimeMS": float(game_end) * 1000.0, "type": "gameEnd", "period": 3, "leftSideGoalTeam": left_goalie_team})
+
+    left_side_goalie_team = game.away_team_name
+    if left_goalie_team == 'home':
+        left_side_goalie_team = game.home_team_name
+
+    game_request["requestDetails"]["timestamps"].append({"mediaRefId": "A", "videoTimeMS": float(game_start) * 1000.0, "type": "gameStart", "period": 1, "leftSideGoalTeam": left_side_goalie_team})
+    game_request["requestDetails"]["timestamps"].append({"mediaRefId": "A", "videoTimeMS": float(game_end) * 1000.0, "type": "gameEnd", "period": 3, "leftSideGoalTeam": left_side_goalie_team})
 
     game_request["requestDetails"]["rosters"] = {"teams": [{"teamRefId": game.home_team_name, "players": []}, {"teamRefId": game.away_team_name, "players": []}]}
 

@@ -139,7 +139,7 @@ class FrameReader:
         self.__first_frame_pts: int = -1 * sys.maxsize
 
     def open(self) -> None:
-        self.__video_container = av.open(self.__video_filename)
+        self.__video_container = av.open(self.__video_filename, hwaccel=av.codec.hwaccel.HWAccel(device_type='cuda', allow_software_fallback=False))
         self.__video_stream = self.__video_container.streams.video[0]
 
         if len(self.__frame_to_timestamp) == 0:
