@@ -192,9 +192,10 @@ Rect cropPano(const Mat& panorama) {
     int x1 = 247;
     int y1 = 277;
     int x2 = x1+4730;
-    int y2 = y1+1712;
+    int y2 = y1+1630;
 
     namedWindow("Pano", WINDOW_NORMAL);
+    resizeWindow("Pano", 1920, 720);
 
     cout << "Rect: " << Rect(x1, y1, x2-x1, y2-y1) << endl;
     Mat tmp = panorama.clone();
