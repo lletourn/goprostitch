@@ -38,20 +38,20 @@ Then you have a hex value of the frames since midnight. Just substract both to k
 
 .bashrc
 ```
-export FFMPEG_VERSION=7.0.2
+export FFMPEG_VERSION=7.1.1
 export FFMPEG_INSTALL_DIR=${HOME}/software/ffmpeg-${FFMPEG_VERSION}
 export PATH=${FFMPEG_INSTALL_DIR}/bin:${PATH}
 export LD_LIBRARY_PATH=${FFMPEG_INSTALL_DIR}/lib:${LD_LIBRARY_PATH}
 export PKG_CONFIG_PATH=${FFMPEG_INSTALL_DIR}/lib/pkgconfig:${PKG_CONFIG_PATH}
-export PKG_CONFIG_PATH=${HOME}/software/nv-codec-headers-12.2/lib/pkgconfig:${PKG_CONFIG_PATH}
+export PKG_CONFIG_PATH=${HOME}/software/nv-codec-headers-13.0.19.0/lib/pkgconfig:${PKG_CONFIG_PATH}
 
-export OPENCV_VERSION=4.10.0
+export OPENCV_VERSION=4.11.0
 export OPENCV_INSTALL_DIR=${HOME}/software/opencv-${OPENCV_VERSION}
 export LD_LIBRARY_PATH=${OPENCV_INSTALL_DIR}/lib:${LD_LIBRARY_PATH}
 export PYTHONPATH=${OPENCV_INSTALL_DIR}/lib/python3.8/site-packages:${PYTHONPATH}
 export CMAKE_PREFIX_PATH=${OPENCV_INSTALL_DIR}:${CMAKE_PREFIX_PATH}
 
-export SPDLOG_INSTALL_DIR=${HOME}/software/spdlog-1.12.0
+export SPDLOG_INSTALL_DIR=${HOME}/software/spdlog-1.15.3
 export LD_LIBRARY_PATH=${SPDLOG_INSTALL_DIR}/lib:${LD_LIBRARY_PATH}
 export PKG_CONFIG_PATH=${SPDLOG_INSTALL_DIR}/lib/pkgconfig:${PKG_CONFIG_PATH}
 export CMAKE_PREFIX_PATH=${SPDLOG_INSTALL_DIR}:${CMAKE_PREFIX_PATH}
@@ -99,13 +99,13 @@ meson setup libvmaf/build libvmaf --buildtype release -Dprefix=${HOME}/software/
 
 git clone https://git.videolan.org/git/ffmpeg/nv-codec-headers.git
 cd nv-codec-headers
-git checkout -b release_n12.2.72.0 n12.2.72.0
+git checkout -b release_n13.0.19.0 n13.0.19.0
 make install PREFIX=${HOME}/software/nv-codec-headers-12.2
 
 wget https://ffmpeg.org/releases/ffmpeg-7.0.2.tar.gz -O ~/src/ffmpeg-7.0.2.tar.gz
 tar xvf ffmpeg-7.0.2.tar.gz
 cd ffmpeg-7.0.2
-./configure --prefix=${HOME}/software/ffmpeg-7.0.2 --enable-libxml2 --enable-libharfbuzz --enable-libfreetype --enable-gpl --enable-libx264 --enable-libx265 --enable-nonfree --enable-libopus --enable-libvpx --enable-openssl --enable-shared --enable-libsrt --enable-libpulse --enable-sdl2 --enable-nvenc --enable-ffnvcodec
+./configure --prefix=${HOME}/software/ffmpeg-7.0.2 --enable-libxml2 --enable-libharfbuzz --enable-libfreetype --enable-gpl --enable-libx264 --enable-libx265 --enable-nonfree --enable-libopus --enable-libvpx --enable-openssl --enable-shared --enable-libsrt --enable-libpulse --enable-sdl2 --enable-nvenc --enable-ffnvcodec -enable-cuda-nvcc --enable-libnpp --extra-cflags=-I/usr/local/cuda/include --extra-ldflags=-L/usr/local/cuda/lib64 --disable-static
 
 make -j $(nproc) && make install
 
@@ -114,15 +114,18 @@ wget "https://github.com/gabime/spdlog/archive/refs/tags/v1.12.0.tar.gz" -O ~/sr
 rm -rf build ; mkdir build ; cd build ; cmake -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=${HOME}/software/spdlog-1.12.0 ../ && make -j $(nproc) && make install
 
 
-wget "https://github.com/opencv/opencv/archive/refs/tags/4.10.0.tar.gz" -O ~/src/opencv-4.10.0.tar.gz
-wget "https://github.com/opencv/opencv_contrib/archive/refs/tags/4.10.0.tar.gz" -O ~/src/opencv_contrib-4.10.0.tar.gz
-tar xvf opencv-4.10.0.tar.gz
-tar xvf opencv_contrib-4.10.0.tar.gz
-cd opencv-4.10.0
+wget "https://github.com/opencv/opencv/archive/refs/tags/4.11.0.tar.gz" -O ~/src/opencv-4.11.0.tar.gz
+wget "https://github.com/opencv/opencv_contrib/archive/refs/tags/4.11.0.tar.gz" -O ~/src/opencv_contrib-4.11.0.tar.gz
+tar xvf opencv-4.11.0.tar.gz
+tar xvf opencv_contrib-4.11.0.tar.gz
+cd opencv-4.11.0
+
+sudo apt install python3-pip
+python3 -m pip install numpy
 
 # Add these on desktop
 # -DBUILD_EXAMPLES=ON -DINSTALL_C_EXAMPLES=ON -DINSTALL_BIN_EXAMPLES=ON -DWITH_GTK=OFF -DWITH_QT=ON -DWITH_OPENGL=ON
-rm -rf build ; mkdir build ; cd build ; cmake -DENABLE_CXX11=ON -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=${HOME}/software/opencv-4.10.0 -DWITH_TBB=ON -DBUILD_opencv_python2=OFF -DOPENCV_EXTRA_MODULES_PATH=${HOME}/src/opencv_contrib-4.10.0/modules -DWITH_CUDA=OFF -DWITH_OPENCL=OFF -DOPENCV_GENERATE_PKGCONFIG=ON -DOPENCV_ENABLE_NONFREE=ON -DBUILD_opencv_rgbd=OFF ../ && make -j $(nproc) && make install
+rm -rf build ; mkdir build ; cd build ; cmake -DENABLE_CXX11=ON -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=${HOME}/software/opencv-4.11.0 -DWITH_TBB=ON -DBUILD_opencv_python2=OFF -DOPENCV_EXTRA_MODULES_PATH=${HOME}/src/opencv_contrib-4.11.0/modules -DWITH_CUDA=ON -DWITH_OPENCL=OFF -DOPENCV_GENERATE_PKGCONFIG=ON -DOPENCV_ENABLE_NONFREE=ON -DBUILD_opencv_rgbd=OFF ../ && make -j $(nproc) && make install
 ```
 
 # Compile
