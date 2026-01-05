@@ -243,7 +243,7 @@ void FrameStitcher::run() {
                 cvtColor(left, tmp_left, COLOR_YUV2BGR_I420);
                 cvtColor(right, tmp_right, COLOR_YUV2BGR_I420);
             } else {
-                spdlog::error("Unsupported pixel format: {}", input_pixel_format_);
+                spdlog::error("Unsupported pixel format: {}", (int)input_pixel_format_);
                 throw runtime_error("Unsupported pixel format.");
             }
             spdlog::trace("[framestitching] Undistort left/right");
