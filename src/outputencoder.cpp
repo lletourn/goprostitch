@@ -47,7 +47,7 @@ OutputEncoder::OutputEncoder(
   panoramic_packet_queue_(queue_size),
   pool_size_(nb_threads) {
 
-    encoder_pix_fmt_ = AV_PIX_FMT_YUV444P;
+    encoder_pix_fmt_ = AV_PIX_FMT_YUV420P;
     audio_time_base_ = (AVRational){(int)audio_time_base.num, (int)audio_time_base.den};
 };
 
@@ -284,7 +284,7 @@ void OutputEncoder::run() {
         spdlog::error("Error creating BGR frame");
         throw runtime_error("Error creating BGR frame");
     }
-    SwsContext* sws_ctx = sws_getContext(bgr_frame->width, bgr_frame->height, (AVPixelFormat)bgr_frame->format, video_width_, video_height_, encoder_pix_fmt_, SWS_BICUBIC, NULL, NULL, NULL);
+    SwsContext* sws_ctx = sws_getContext(bgr_frame->width, bgr_frame->height, (AVPixelFormat)bgr_frame->format, video_width_, video_height_, encoder_pix_fmt_, SWS_POINT, NULL, NULL, NULL);
     if (!sws_ctx) {
         spdlog::error("Error creating output scaling context");
         throw runtime_error("Error creating output scaling context");
