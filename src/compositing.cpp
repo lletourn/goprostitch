@@ -105,8 +105,8 @@ void ImageCompositing::compose(const vector<Mat>& images, Mat& output_image, int
     int num_images = static_cast<int>(images.size());
     vector<Mat> full_imgs(num_images);
     spdlog::trace("[compositing] Clone images");
-    full_imgs[0] = images[0].clone();
-    full_imgs[1] = images[1].clone();
+    full_imgs[0] = images[0];
+    full_imgs[1] = images[1];
     
     spdlog::trace("[compositing] Create pano placeholder");
     Mat pano_img(panoramic_image_size_, CV_8UC3, Scalar(0,0,0));
@@ -151,7 +151,6 @@ void ImageCompositing::compose(const vector<Mat>& images, Mat& output_image, int
             img_warped.convertTo(img_warped_s, CV_16S);
             spdlog::trace("[compositing] [{}] converted to short", img_idx);
             img_warped.release();
-            img.release();
             spdlog::trace("[compositing] [{}] Released", img_idx);
 
             if (!blender) {

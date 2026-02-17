@@ -261,20 +261,21 @@ void FrameStitcher::run() {
             Mat cropped_image(panoramic_image, Range(crop_offset_y_, crop_offset_y_+crop_height_), Range(crop_offset_x_, crop_offset_x_+crop_width_));
             spdlog::trace("[framestitching] Cropped pano");
 
-            panoramic_image_cropped = cropped_image.clone();  // Make the crop contiguous
+
             // This should be done here, but it's slow enough!
             //cvtColor(cropped_image, panoramic_image_yuv, COLOR_BGR2YUV_I420);
             //spdlog::trace("Converted to YUV I420, planar");
 
             unique_ptr<PanoramicPacket> pano_packet(new PanoramicPacket);
             spdlog::trace("[framestitching] Created pano packet");
-            pano_packet->data_size = panoramic_image_cropped.total() * panoramic_image_cropped.elemSize();
+            pano_packet->data_size = cropped_image.total() * cropped_image.elemSize();
             //pano_packet->data_size = panoramic_image_yuv.total() * panoramic_image_yuv.elemSize();
             pano_packet->data = unique_ptr<uint8_t[]>(new uint8_t[pano_packet->data_size]);
             spdlog::trace("[framestitching] Created image buffer in packet");
 
+            Mat direct(crop_height_, crop_width_, CV_8UC3, pano_packet->data.get()); // Only a pointer to the data. Mat doesn't hold the memory
+            cropped_image.copyTo(direct);
             //memcpy(pano_packet->data.get(), panoramic_image_yuv.data, pano_packet->data_size);
-            memcpy(pano_packet->data.get(), panoramic_image_cropped.data, pano_packet->data_size);
             spdlog::trace("[framestitching] Copied data");
 
             // Don't use W H from YUV frame. Opencv rows cols represent data row col, not image row col. So it's wrong for sampled data like YUV4XX not 444.
