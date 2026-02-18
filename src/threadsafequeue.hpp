@@ -14,6 +14,18 @@ template<class T, class Deleter = std::default_delete<T>> class ThreadSafeQueue 
     : max_size_(max_size), q_(), m_(), read_condition_(), write_condition_() {
     }
 
+    std::unique_ptr<T, Deleter> try_pop() {
+        std::unique_lock<std::mutex> lock(m_);
+        if (q_.empty()) {
+            return std::unique_ptr<T, Deleter>(nullptr);
+        }
+        std::unique_ptr<T, Deleter> val(move(q_.front()));
+        q_.pop();
+        lock.unlock();
+        write_condition_.notify_one();
+        return val;
+    }
+
     std::unique_ptr<T, Deleter> pop(std::chrono::milliseconds wait_period=std::chrono::milliseconds(0)) {
         std::unique_lock<std::mutex> lock(m_);
         
