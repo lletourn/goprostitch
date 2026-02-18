@@ -34,7 +34,7 @@ class OutputEncoder {
     const std::string filename_;
     bool use_gpu_;
     bool use_left_audio_;
-    bool running_;
+    std::atomic<bool> running_;
     std::atomic<bool> done_;
     uint32_t video_width_;
     uint32_t video_height_;

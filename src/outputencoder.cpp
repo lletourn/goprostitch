@@ -3,15 +3,14 @@
 #include <iostream>
 #include <csignal>
 #include <stdexcept>
+#include <iomanip>
 #include <sstream>
 #include <spdlog/spdlog.h>
 
-#include <opencv2/opencv.hpp>
 extern "C" {
   #include <libavutil/error.h>
   #include <libavutil/imgutils.h>
   #include <libavutil/opt.h>
-  #include <libswscale/swscale.h>
 }
 
 using namespace std;
@@ -134,13 +133,13 @@ void OutputEncoder::init_video() {
             throw runtime_error("Could not allocate video codec context");
         }
 
-        video_codec_ctx_->rc_max_rate = 11*104*10224;
+        video_codec_ctx_->rc_max_rate = 11*1024*1024;
         video_codec_ctx_->max_b_frames = 3;
         // video_codec_ctx_->profile = NV_ENC_PROFILE_HEVC_MAIN;  NOT ACCESSIBLE PUBLICALY. Use codec priv_data
         // video_codec_ctx_->level = NV_ENC_LEVEL_HEVC_51; NOT ACCESSIBLE PUBLICALY. Use codec priv_data
         video_codec_ctx_->qmin = 24;
         video_codec_ctx_->qmax = 51;
-        video_codec_ctx_->rc_buffer_size = 20*1024*104;
+        video_codec_ctx_->rc_buffer_size = 20*1024*1024;
         av_opt_set(video_codec_ctx_->priv_data, "preset", "p5", 0);
         av_opt_set(video_codec_ctx_->priv_data, "profile", "main", 0);
         av_opt_set(video_codec_ctx_->priv_data, "level", "5.1", 0);
@@ -264,7 +263,6 @@ void OutputEncoder::run() {
     #endif
 
     int32_t ret;
-    chrono::milliseconds audio_wait(chrono::milliseconds(1));
     chrono::milliseconds video_wait(chrono::milliseconds(100));
 
     AVPacket* video_pkt = av_packet_alloc();
@@ -273,22 +271,8 @@ void OutputEncoder::run() {
         throw runtime_error("Couldn't allocate video packet");
     }
 
-    AVFrame *bgr_frame = av_frame_alloc();
-    bgr_frame->format = AV_PIX_FMT_BGR24;
-    bgr_frame->width = video_width_;
-    bgr_frame->height = video_height_;
-    uint32_t bgr_frame_size = av_image_get_buffer_size((AVPixelFormat)bgr_frame->format, bgr_frame->width, bgr_frame->height, 1);
-
-    ret = av_image_alloc(bgr_frame->data, bgr_frame->linesize, bgr_frame->width, bgr_frame->height, (AVPixelFormat)bgr_frame->format, 1);
-    if (ret < 0) {
-        spdlog::error("Error creating BGR frame");
-        throw runtime_error("Error creating BGR frame");
-    }
-    SwsContext* sws_ctx = sws_getContext(bgr_frame->width, bgr_frame->height, (AVPixelFormat)bgr_frame->format, video_width_, video_height_, encoder_pix_fmt_, SWS_POINT, NULL, NULL, NULL);
-    if (!sws_ctx) {
-        spdlog::error("Error creating output scaling context");
-        throw runtime_error("Error creating output scaling context");
-    }
+    uint8_t* src_data[4] = {0};
+    int src_linesize[4] = {0};
 
     uint32_t frame_idx=0;
     chrono::steady_clock::time_point start = chrono::steady_clock::now();
@@ -301,7 +285,7 @@ void OutputEncoder::run() {
     while(running_) {
         spdlog::debug("[outputenc] Process packets");
         while(true) {
-            unique_ptr<AVPacket, PacketDeleter> audio_packet(left_audio_packet_queue_.pop(audio_wait));
+            unique_ptr<AVPacket, PacketDeleter> audio_packet(left_audio_packet_queue_.try_pop());
             if(audio_packet) {
                 spdlog::trace("[outputenc] Got left audio packet");
                 double pts_time = audio_packet->pts * av_q2d(left_audio_stream_->time_base);
@@ -317,7 +301,7 @@ void OutputEncoder::run() {
             }
         }
         while(true) {
-            unique_ptr<AVPacket, PacketDeleter> audio_packet(right_audio_packet_queue_.pop(audio_wait));
+            unique_ptr<AVPacket, PacketDeleter> audio_packet(right_audio_packet_queue_.try_pop());
             if(audio_packet) {
                 spdlog::trace("[outputenc] Got right audio packet");
                 double pts_time = audio_packet->pts * av_q2d(left_audio_stream_->time_base);
@@ -332,11 +316,19 @@ void OutputEncoder::run() {
                 break;
             }
         }
-        
+
+        // Drain all available video packets from the queue
         unique_ptr<PanoramicPacket> new_panoramic_packet(panoramic_packet_queue_.pop(video_wait));
         if(new_panoramic_packet) {
-            uint32_t idx = new_panoramic_packet->idx;
-            video_packets.insert(make_pair(idx, move(new_panoramic_packet)));
+            video_packets.insert(make_pair(new_panoramic_packet->idx, move(new_panoramic_packet)));
+            while(true) {
+                unique_ptr<PanoramicPacket> extra(panoramic_packet_queue_.try_pop());
+                if(extra) {
+                    video_packets.insert(make_pair(extra->idx, move(extra)));
+                } else {
+                    break;
+                }
+            }
         }
 
         while(video_packets.find(frame_idx) != video_packets.end()) {
@@ -372,17 +364,13 @@ void OutputEncoder::run() {
             video_frame_->time_base = (AVRational){video_frame_rate_.den, video_frame_rate_.num};
             video_frame_->duration = 1;
             ++frame_idx;
-            ret = av_image_fill_arrays(bgr_frame->data, bgr_frame->linesize, current_panoramic_packet->data.get(), (AVPixelFormat)bgr_frame->format, bgr_frame->width, bgr_frame->height, 1);
+            ret = av_image_fill_arrays(src_data, src_linesize, current_panoramic_packet->data.get(), encoder_pix_fmt_, video_width_, video_height_, 1);
             if (ret < 0) {
                 spdlog::error("Error filling image array");
                 throw runtime_error("Error filling image array");
             }
 
-            ret = sws_scale(sws_ctx, bgr_frame->data, bgr_frame->linesize, 0, video_frame_->height, video_frame_->data, video_frame_->linesize);
-            if(ret < 0) {
-                spdlog::error("Error converting formats from bgr to encoder");
-                throw runtime_error("Error converting formats from bgr to encoder");
-            }
+            av_image_copy(video_frame_->data, video_frame_->linesize, (const uint8_t**)src_data, src_linesize, encoder_pix_fmt_, video_width_, video_height_);
 
             ret = avcodec_send_frame(video_codec_ctx_, video_frame_);
             if (ret < 0) {
@@ -451,9 +439,6 @@ void OutputEncoder::run() {
     }
 
     av_write_trailer(av_format_ctx_);
-
-    sws_freeContext(sws_ctx);
-    av_frame_free(&bgr_frame);
 
     av_packet_free(&video_pkt);
 
