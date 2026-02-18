@@ -25,7 +25,7 @@ float compute_warped_image_scale(const vector<CameraParams>& cameras) {
 }
 
 ImageCompositing::ImageCompositing(bool do_blending, bool use_gpu, const vector<cv::detail::CameraParams>& cameras, const std::vector<cv::UMat>& masks_warped, const vector<Size> images_size)
-: do_blending_(do_blending), use_gpu_(use_gpu), cameras_parameters_(cameras), blending_masks_(masks_warped.size()), corners_(cameras.size()), sizes_(cameras.size()), top_left_(numeric_limits<int32_t>::max(), numeric_limits<int32_t>::  max()) {
+: do_blending_(do_blending), use_gpu_(use_gpu), cameras_parameters_(cameras), blending_masks_(masks_warped.size()), corners_(cameras.size()), sizes_(cameras.size()), top_left_(numeric_limits<int32_t>::max(), numeric_limits<int32_t>::  max()), input_image_sizes_(images_size) {
 
     if (do_blending_)
         spdlog::info("[compositing] Using multiband blending");
@@ -35,10 +35,15 @@ ImageCompositing::ImageCompositing(bool do_blending, bool use_gpu, const vector<
     float warped_image_scale = compute_warped_image_scale(cameras);
     Ptr<WarperCreator> warper_creator;
 
-    if (use_gpu_)
+    if (use_gpu_) {
+        spdlog::info("[compositing] Using GPU");
         warper_creator = makePtr<cv::CylindricalWarperGpu>();
-    else
+    }
+    else {
+        spdlog::info("[compositing] Not using GPU");
         warper_creator = makePtr<cv::CylindricalWarper>();
+    }
+
     if (!warper_creator) {
         throw runtime_error("Can't create the Cylindrical warper");
     }
@@ -198,4 +203,30 @@ void ImageCompositing::compose(const vector<Mat>& images, Mat& output_image, int
         result.convertTo(output_image, CV_8UC3);
     }
     spdlog::trace("[compositing] done");
+}
+
+void ImageCompositing::buildWarpMaps(vector<Mat>& warp_maps_x, vector<Mat>& warp_maps_y) {
+    int num_images = cameras_parameters_.size();
+    warp_maps_x.resize(num_images);
+    warp_maps_y.resize(num_images);
+    for (int i = 0; i < num_images; i++) {
+        warper_->buildMaps(input_image_sizes_[i], K_CV_32Fs_[i], cameras_parameters_[i].R, warp_maps_x[i], warp_maps_y[i]);
+    }
+}
+
+void ImageCompositing::composePreWarped(const vector<Mat>& warped_images, Mat& output_image, int32_t frame_idx) {
+    spdlog::trace("[compositing] Start (pre-warped)");
+    int num_images = static_cast<int>(warped_images.size());
+
+    output_image.create(panoramic_image_size_, CV_8UC3);
+    output_image.setTo(Scalar(0,0,0));
+
+    for (int img_idx = num_images-1; img_idx >= 0; --img_idx) {
+        spdlog::trace("[compositing] [{}] Compositing pre-warped image", img_idx);
+        Mat roi_to_fill(output_image, cv::Rect(corners_[img_idx].x-top_left_.x, corners_[img_idx].y-top_left_.y, warped_images[img_idx].cols, warped_images[img_idx].rows));
+        warped_images[img_idx].copyTo(roi_to_fill, blending_masks_[img_idx]);
+        spdlog::trace("[compositing] [{}] Filled ROI with pre-warped masked image", img_idx);
+    }
+
+    spdlog::trace("[compositing] done (pre-warped)");
 }

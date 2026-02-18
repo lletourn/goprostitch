@@ -13,6 +13,8 @@ class ImageCompositing {
 
   public:
     void compose(const std::vector<cv::Mat>& images, cv::Mat& output_image, int32_t frame_idx=0);
+    void buildWarpMaps(std::vector<cv::Mat>& warp_maps_x, std::vector<cv::Mat>& warp_maps_y);
+    void composePreWarped(const std::vector<cv::Mat>& warped_images, cv::Mat& output_image, int32_t frame_idx=0);
 
   private:
     bool do_blending_;
@@ -25,6 +27,7 @@ class ImageCompositing {
     cv::Point top_left_;
     cv::Size panoramic_image_size_;
     std::vector<cv::Mat> K_CV_32Fs_;
+    std::vector<cv::Size> input_image_sizes_;
 
     inline static std::mutex single_warp_mutex_;
 };

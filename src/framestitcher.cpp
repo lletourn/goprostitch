@@ -204,20 +204,34 @@ void FrameStitcher::run() {
     pthread_setname_np(pthread_self(), "FrameStitcher");
     #endif
 
-    vector<Mat> images(2);
     Mat panoramic_image;
-    Mat panoramic_image_cropped;
-    Mat rs;
 
-    Mat view, rview, map1, map2;
+    // Compute undistortion maps as float for map composition
+    Mat undist_map_x, undist_map_y;
     Mat optimized_camera_matrix = getOptimalNewCameraMatrix(camera_intrinsic_K_, camera_intrinsic_distortion_coefficients_, calibration_image_size_, 0);
-    initUndistortRectifyMap(camera_intrinsic_K_, camera_intrinsic_distortion_coefficients_, Mat(), optimized_camera_matrix, calibration_image_size_,  CV_16SC2, map1, map2);
+    initUndistortRectifyMap(camera_intrinsic_K_, camera_intrinsic_distortion_coefficients_, Mat(), optimized_camera_matrix, calibration_image_size_, CV_32FC1, undist_map_x, undist_map_y);
 
     vector<Size> image_sizes = {calibration_image_size_, calibration_image_size_};
     ImageCompositing compositor(false, use_gpu_, camera_params_, image_masks_, image_sizes);
 
+    // Build combined undistortion+warp maps (one-time cost, eliminates per-frame warp)
+    vector<Mat> warp_maps_x, warp_maps_y;
+    compositor.buildWarpMaps(warp_maps_x, warp_maps_y);
+
+    uint32_t num_images = camera_params_.size();
+    vector<Mat> combined_map1(num_images), combined_map2(num_images);
+    for (uint32_t i = 0; i < num_images; i++) {
+        Mat combined_x, combined_y;
+        remap(undist_map_x, combined_x, warp_maps_x[i], warp_maps_y[i], INTER_LINEAR);
+        remap(undist_map_y, combined_y, warp_maps_x[i], warp_maps_y[i], INTER_LINEAR);
+        convertMaps(combined_x, combined_y, combined_map1[i], combined_map2[i], CV_16SC2);
+    }
+    spdlog::info("[framestitching] Combined undistortion and warp maps computed");
+
     Mat tmp_left;
     Mat tmp_right;
+    Mat panoramic_image_yuv;
+    vector<Mat> warped_images(num_images);
     while(running_) {
         spdlog::debug("[framestitching] Getting LR");
         unique_ptr<LeftRightPacket> left_right_packet(stitcher_queue_.pop(chrono::seconds(1)));
@@ -246,36 +260,32 @@ void FrameStitcher::run() {
                 spdlog::error("Unsupported pixel format: {}", (int)input_pixel_format_);
                 throw runtime_error("Unsupported pixel format.");
             }
-            spdlog::trace("[framestitching] Undistort left/right");
-            remap(tmp_left, images[0], map1, map2, INTER_LINEAR);
-            remap(tmp_right, images[1], map1, map2, INTER_LINEAR);
-            spdlog::trace("[framestitching] Undistorted left/right");
+            spdlog::trace("[framestitching] Combined undistort+warp remap");
+            remap(tmp_left, warped_images[0], combined_map1[0], combined_map2[0], INTER_LINEAR, BORDER_REFLECT);
+            remap(tmp_right, warped_images[1], combined_map1[1], combined_map2[1], INTER_LINEAR, BORDER_REFLECT);
+            spdlog::trace("[framestitching] Combined undistort+warp done");
 
             if(match_histogram_)
-                MatchHistograms(images[1], reference_bgr_cumsum_, reference_bgr_value_idxs_);
+                MatchHistograms(warped_images[1], reference_bgr_cumsum_, reference_bgr_value_idxs_);
 
-            spdlog::trace("[framestitching] Composing");
-            compositor.compose(images, panoramic_image, left_right_packet->idx);
+            spdlog::trace("[framestitching] Composing pre-warped");
+            compositor.composePreWarped(warped_images, panoramic_image, left_right_packet->idx);
             spdlog::trace("[framestitching] Composed");
 
             Mat cropped_image(panoramic_image, Range(crop_offset_y_, crop_offset_y_+crop_height_), Range(crop_offset_x_, crop_offset_x_+crop_width_));
             spdlog::trace("[framestitching] Cropped pano");
 
 
-            // This should be done here, but it's slow enough!
-            //cvtColor(cropped_image, panoramic_image_yuv, COLOR_BGR2YUV_I420);
-            //spdlog::trace("Converted to YUV I420, planar");
+            cvtColor(cropped_image, panoramic_image_yuv, COLOR_BGR2YUV_I420);
+            spdlog::trace("[framestitching] Converted to YUV I420, planar");
 
             unique_ptr<PanoramicPacket> pano_packet(new PanoramicPacket);
             spdlog::trace("[framestitching] Created pano packet");
-            pano_packet->data_size = cropped_image.total() * cropped_image.elemSize();
-            //pano_packet->data_size = panoramic_image_yuv.total() * panoramic_image_yuv.elemSize();
+            pano_packet->data_size = panoramic_image_yuv.total() * panoramic_image_yuv.elemSize();
             pano_packet->data = unique_ptr<uint8_t[]>(new uint8_t[pano_packet->data_size]);
             spdlog::trace("[framestitching] Created image buffer in packet");
 
-            Mat direct(crop_height_, crop_width_, CV_8UC3, pano_packet->data.get()); // Only a pointer to the data. Mat doesn't hold the memory
-            cropped_image.copyTo(direct);
-            //memcpy(pano_packet->data.get(), panoramic_image_yuv.data, pano_packet->data_size);
+            memcpy(pano_packet->data.get(), panoramic_image_yuv.data, pano_packet->data_size);
             spdlog::trace("[framestitching] Copied data");
 
             // Don't use W H from YUV frame. Opencv rows cols represent data row col, not image row col. So it's wrong for sampled data like YUV4XX not 444.
