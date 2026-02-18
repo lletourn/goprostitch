@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <chrono>
 #include <memory>
 #include <unordered_map>
@@ -21,9 +22,9 @@ class InputSyncer {
     ThreadSafeQueue<VideoPacket>& left_queue_;
     ThreadSafeQueue<VideoPacket>& right_queue_;
 
-    bool readers_are_done_;
-    bool left_is_done_;
-    bool right_is_done_;
+    std::atomic<bool> readers_are_done_;
+    std::atomic<bool> left_is_done_;
+    std::atomic<bool> right_is_done_;
     uint32_t next_frame_idx_;
     uint32_t last_frame_idx_;
     std::unique_ptr<VideoPacket> left_packet_;

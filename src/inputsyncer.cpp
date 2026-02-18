@@ -47,7 +47,7 @@ unique_ptr<LeftRightPacket> InputSyncer::next_pair() {
     if(next_frame_idx_ < last_frame_idx_)
         spdlog::debug("NextFrame: {} Has Left frame: {} Has Right Frame: {}", next_frame_idx_, (bool)left_packet_, (bool)right_packet_);
 
-    if((!left_packet_ && left_is_done_) || (!right_packet_ && right_is_done_) && last_frame_idx_ == numeric_limits<int32_t>::max())
+    if(((!left_packet_ && left_is_done_) || (!right_packet_ && right_is_done_)) && last_frame_idx_ == numeric_limits<int32_t>::max())
         last_frame_idx_ = next_frame_idx_;
 
     if(left_packet_ && right_packet_ && left_packet_->idx == next_frame_idx_ && right_packet_->idx == next_frame_idx_) {
