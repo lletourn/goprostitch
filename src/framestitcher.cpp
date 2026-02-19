@@ -136,7 +136,8 @@ FrameStitcher::FrameStitcher(
     const Size calibration_image_size,
     const vector<UMat>& image_masks,
     const vector<vector<uint32_t>>& reference_bgr_value_idxs,
-    const vector<vector<double>>& reference_bgr_cumsum)
+    const vector<vector<double>>& reference_bgr_cumsum,
+    bool straighten)
 : use_gpu_(use_gpu),
   match_histogram_(false),
   crop_offset_x_(crop_offset_x),
@@ -153,7 +154,8 @@ FrameStitcher::FrameStitcher(
   reference_bgr_value_idxs_(reference_bgr_value_idxs),
   reference_bgr_cumsum_(reference_bgr_cumsum),
   running_(false),
-  done_(false) {
+  done_(false),
+  straighten_(straighten) {
 
     // Find median focal length
     vector<double> focals;
@@ -228,6 +230,15 @@ void FrameStitcher::run() {
     }
     spdlog::info("[framestitching] Combined undistortion and warp maps computed");
 
+    // Build straighten correction maps (combines correction + crop into one remap)
+    Mat straighten_map1, straighten_map2;
+    if (straighten_) {
+        Mat straighten_map_x, straighten_map_y;
+        compositor.buildStraightenMaps(warped_image_scale_, straighten_map_x, straighten_map_y,
+                                       crop_offset_x_, crop_offset_y_, crop_width_, crop_height_);
+        convertMaps(straighten_map_x, straighten_map_y, straighten_map1, straighten_map2, CV_16SC2);
+    }
+
     Mat tmp_left;
     Mat tmp_right;
     Mat panoramic_image_yuv;
@@ -272,9 +283,14 @@ void FrameStitcher::run() {
             compositor.composePreWarped(warped_images, panoramic_image, left_right_packet->idx);
             spdlog::trace("[framestitching] Composed");
 
-            Mat cropped_image(panoramic_image, Range(crop_offset_y_, crop_offset_y_+crop_height_), Range(crop_offset_x_, crop_offset_x_+crop_width_));
+            Mat cropped_image;
+            if (straighten_) {
+                spdlog::trace("[framestitching] Straighten + crop remap");
+                remap(panoramic_image, cropped_image, straighten_map1, straighten_map2, INTER_LINEAR, BORDER_CONSTANT);
+            } else {
+                cropped_image = Mat(panoramic_image, Range(crop_offset_y_, crop_offset_y_+crop_height_), Range(crop_offset_x_, crop_offset_x_+crop_width_));
+            }
             spdlog::trace("[framestitching] Cropped pano");
-
 
             cvtColor(cropped_image, panoramic_image_yuv, COLOR_BGR2YUV_I420);
             spdlog::trace("[framestitching] Converted to YUV I420, planar");

@@ -230,3 +230,25 @@ void ImageCompositing::composePreWarped(const vector<Mat>& warped_images, Mat& o
 
     spdlog::trace("[compositing] done (pre-warped)");
 }
+
+void ImageCompositing::buildStraightenMaps(float warp_scale, Mat& map_x, Mat& map_y, uint32_t crop_x, uint32_t crop_y, uint32_t crop_w, uint32_t crop_h) {
+    // Projection center in panoramic image pixel coordinates
+    float cx = static_cast<float>(-top_left_.x);
+    float cy = static_cast<float>(-top_left_.y);
+
+    map_x.create(crop_h, crop_w, CV_32FC1);
+    map_y.create(crop_h, crop_w, CV_32FC1);
+
+    for (int y = 0; y < static_cast<int>(crop_h); y++) {
+        float y_pano = static_cast<float>(y + crop_y);
+        for (int x = 0; x < static_cast<int>(crop_w); x++) {
+            float x_pano = static_cast<float>(x + crop_x);
+            float theta = (x_pano - cx) / warp_scale;
+            float cos_theta = cosf(theta);
+            map_x.at<float>(y, x) = x_pano;
+            map_y.at<float>(y, x) = cy + (y_pano - cy) * cos_theta;
+        }
+    }
+
+    spdlog::info("[compositing] Built straighten maps ({}x{}) cx={:.1f} cy={:.1f} scale={:.1f}", crop_w, crop_h, cx, cy, warp_scale);
+}

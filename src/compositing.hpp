@@ -15,6 +15,9 @@ class ImageCompositing {
     void compose(const std::vector<cv::Mat>& images, cv::Mat& output_image, int32_t frame_idx=0);
     void buildWarpMaps(std::vector<cv::Mat>& warp_maps_x, std::vector<cv::Mat>& warp_maps_y);
     void composePreWarped(const std::vector<cv::Mat>& warped_images, cv::Mat& output_image, int32_t frame_idx=0);
+    void buildStraightenMaps(float warp_scale, cv::Mat& map_x, cv::Mat& map_y,
+                             uint32_t crop_x, uint32_t crop_y,
+                             uint32_t crop_w, uint32_t crop_h);
 
   private:
     bool do_blending_;
