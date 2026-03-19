@@ -60,12 +60,17 @@ std::string type2str(int type) {
   return r;
 }
 
+void rotateImage(const Mat& src, Mat& dst, int width, int height, double angle) {
+    Point2f center = Point2f(width / 2.0, height / 2.0);
+    Mat M = getRotationMatrix2D(center, angle, 1.0);
+    warpAffine(src, dst, M, Size(width, height), INTER_LINEAR, BORDER_CONSTANT, (0, 0, 0));
+}
 
 void finding(const string& features_type, const vector<Mat>& src_images, const vector<PointPair>& point_pairs, vector<CameraParams>& cameras, vector<UMat>& masks_warped);
 
 Rect cropPano(const Mat& panorama);
 
-void writeStitchingData(const string& cameras_params_filename, const vector<CameraParams>& cameras, const vector<UMat>& masks_warped, const Rect& crop_rect) {
+void writeStitchingData(const string& cameras_params_filename, const vector<CameraParams>& cameras, const vector<UMat>& masks_warped, const Rect& crop_rect, double left_rotation, double right_rotation) {
     rapidjson::Document stitching_doc(kObjectType);
 
     Value cameras_doc(kArrayType);
@@ -122,6 +127,9 @@ void writeStitchingData(const string& cameras_params_filename, const vector<Came
     pano_crop.AddMember("h", crop_rect.height, stitching_doc.GetAllocator());
     stitching_doc.AddMember("crop", pano_crop, stitching_doc.GetAllocator());
 
+    stitching_doc.AddMember("left_rotation", left_rotation, stitching_doc.GetAllocator());
+    stitching_doc.AddMember("right_rotation", right_rotation, stitching_doc.GetAllocator());
+
     ofstream ofs(cameras_params_filename);
     OStreamWrapper osw(ofs);
  
@@ -140,6 +148,8 @@ int main(int argc, char* argv[]) {
         "{help h usage ? | | print this message }"
         "{left |<none>| Left image }"
         "{right |<none>| Right image }"
+        "{leftrotation |0.0| Left image rotation }"
+        "{rightrotation |0.0| Right image rotation }"
         "{keypoints | | Left-Right keypoints json filename}"
         "{output |<none>| Output panorama }"
         "{camparams | | Camera parameter filename }"
@@ -155,7 +165,16 @@ int main(int argc, char* argv[]) {
         return 0;
     }
 
-    vector<Mat> images = {imread(parser.get<string>("left")), imread(parser.get<string>("right"))};
+    double left_rotation = parser.get<double>("leftrotation");
+    double right_rotation = parser.get<double>("rightrotation");
+    Mat tmp_l = imread(parser.get<string>("left"));
+    Mat tmp_r = imread(parser.get<string>("right"));
+    if(left_rotation != 0)
+        rotateImage(tmp_l, tmp_l, tmp_l.cols, tmp_l.rows, left_rotation);
+    if(right_rotation != 0)
+        rotateImage(tmp_r, tmp_r, tmp_r.cols, tmp_r.rows, right_rotation);
+
+    vector<Mat> images = {tmp_l, tmp_r};
     vector<Size> images_size = {images[0].size(), images[1].size()};
     string result_name = parser.get<string>("output");
 
@@ -165,7 +184,9 @@ int main(int argc, char* argv[]) {
     if(!parser.get<bool>("findcamparams")) {
         spdlog::info("From cameras params");
         Rect rect;
-        readSeamData(parser.get<string>("camparams"), cameras, masks_warped, rect);
+        double left_rotation;
+        double right_rotation;
+        readSeamData(parser.get<string>("camparams"), cameras, masks_warped, rect, left_rotation, right_rotation);
     } else {
         spdlog::info("Generate camera params");
         string features_type = parser.get<string>("featuresfinder");
@@ -185,7 +206,7 @@ int main(int argc, char* argv[]) {
     imwrite(result_name, output_image);
 
     Rect rect = cropPano(output_image);
-    writeStitchingData(parser.get<string>("camparams"), cameras, masks_warped, rect);
+    writeStitchingData(parser.get<string>("camparams"), cameras, masks_warped, rect, left_rotation, right_rotation);
 }
 
 Rect cropPano(const Mat& panorama) {

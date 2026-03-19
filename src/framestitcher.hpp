@@ -17,7 +17,7 @@ class FrameStitcher {
     static void MatchHistograms(cv::Mat& image, const std::vector<std::vector<double>>& reference_bgr_cumsum, const std::vector<std::vector<uint32_t>>& reference_bgr_value_idxs);
     static void interp(const std::vector<double>& x, const std::vector<double>& xp, const std::vector<uint32_t>& yp, std::vector<uint8_t>& y);
 
-    FrameStitcher(bool use_gpu, uint32_t crop_offset_x, uint32_t crop_offset_y, uint32_t crop_width, uint32_t crop_height, ThreadSafeQueue<LeftRightPacket>& stitcher_queue, ThreadSafeQueue<PanoramicPacket>& output_queue, std::vector<cv::detail::CameraParams> camera_params, const cv::Mat camera_intrinsic_K, const cv::Mat camera_intrinsic_distortion_coefficients, const cv::Size calibration_image_size, const std::vector<cv::UMat>& image_masks, const std::vector<std::vector<uint32_t>>& reference_bgr_value_idxs, const std::vector<std::vector<double>>& reference_bgr_cumsum, bool straighten = false);
+    FrameStitcher(bool use_gpu, uint32_t crop_offset_x, uint32_t crop_offset_y, uint32_t crop_width, uint32_t crop_height, double left_rotation, double right_rotation, ThreadSafeQueue<LeftRightPacket>& stitcher_queue, ThreadSafeQueue<PanoramicPacket>& output_queue, std::vector<cv::detail::CameraParams> camera_params, const cv::Mat camera_intrinsic_K, const cv::Mat camera_intrinsic_distortion_coefficients, const cv::Size calibration_image_size, const std::vector<cv::UMat>& image_masks, const std::vector<std::vector<uint32_t>>& reference_bgr_value_idxs, const std::vector<std::vector<double>>& reference_bgr_cumsum, bool straighten = false);
     ~FrameStitcher();
 
     void set_input_pixel_format(PixelFormat input_pix_fmt);
@@ -35,6 +35,8 @@ class FrameStitcher {
     uint32_t crop_offset_y_;
     uint32_t crop_width_;
     uint32_t crop_height_;
+    double left_rotation_;
+    double right_rotation_;
     ThreadSafeQueue<LeftRightPacket>& stitcher_queue_;
     ThreadSafeQueue<PanoramicPacket>& output_queue_;
     std::vector<cv::detail::CameraParams> camera_params_;

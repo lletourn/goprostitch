@@ -15,7 +15,7 @@ using namespace cv;
 using namespace cv::detail;
 using namespace rapidjson;
 
-void readSeamData(const string& cameras_filename, vector<CameraParams>& cameras, vector<UMat>& masks_warped, Rect& rect) {
+void readSeamData(const string& cameras_filename, vector<CameraParams>& cameras, vector<UMat>& masks_warped, Rect& rect, double& left_rotation, double& right_rotation) {
     rapidjson::Document stitching_doc;
     ifstream ifs(cameras_filename);
     rapidjson::IStreamWrapper isw(ifs);
@@ -62,6 +62,13 @@ void readSeamData(const string& cameras_filename, vector<CameraParams>& cameras,
     int w = stitching_doc["crop"]["w"].GetInt();
     int h = stitching_doc["crop"]["h"].GetInt();
     rect = Rect(x, y, w, h);
+
+    left_rotation = 0.0;
+    right_rotation = 0.0;
+    if(stitching_doc.HasMember("left_rotation"))
+        left_rotation = stitching_doc["left_rotation"].GetDouble();
+    if(stitching_doc.HasMember("right_rotation"))
+        right_rotation = stitching_doc["right_rotation"].GetDouble();
 }
 
 void readCalibration(const string& calibration_filename, Mat& K, Mat& distortion_coefficients, Size& calibration_image_size) {

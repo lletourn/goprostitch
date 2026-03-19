@@ -126,3 +126,12 @@ Some nifty commands:
 ffmpeg -y -hwaccel cuda -i 20241215-lhdrs-hevc.mp4 -an -c:v hevc_nvenc -pix_fmt yuv420p -preset p5 -g 600 -bf 3 -b_ref_mode middle -profile:v main -level "5.1" -rc vbr -spatial-aq 1 -cq 24 -qmin 24 -qmax 50 -maxrate 11M -rc-lookahead 20 -bufsize:v 20M  hevc_nvenc_better.mp4
 
 ``` 
+
+# Flash detect to see camera timing drift:
+```
+P=`pwd`; for f in `ls -l GX*.MP4 | sed 's/.* \(G.[0-9]\+\.MP4\)$/\1/g'`; do echo "file ${P}/${f}";done > concat.txt^C
+ffmpeg -y -nostdin -safe 0 -f concat -i concat.txt -codec copy -map 0:0 -map 0:1 concat.mp4
+
+source ~/software/python3.12-venv/syncvideos/bin/activate
+python3 flashdetect.py --video concat.mp4
+```

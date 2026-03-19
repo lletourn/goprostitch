@@ -60,7 +60,9 @@ int main(int argc, const char ** argv) {
     vector<detail::CameraParams> cameras_params;
     vector<UMat> masks_warped;
     Rect rect;
-    readSeamData(camera_params_filename, cameras_params, masks_warped, rect);
+    double left_rotation;
+    double right_rotation;
+    readSeamData(camera_params_filename, cameras_params, masks_warped, rect, left_rotation, right_rotation);
     uint32_t pano_offset_x = rect.x;
     uint32_t pano_offset_y = rect.y;
     uint32_t pano_width = rect.width;
@@ -117,7 +119,7 @@ int main(int argc, const char ** argv) {
 
     ThreadSafeQueue<PanoramicPacket> panoramic_packet_queue(input_queue_size);
     vector<unique_ptr<FrameStitcher>> frame_stitchers;
-    unique_ptr<FrameStitcher> fs(new FrameStitcher(false, pano_offset_x, pano_offset_y, pano_width, pano_height, stitcher_queue, panoramic_packet_queue, cameras_params, camera_intrinsics_K, camera_intrinsics_distortion_coefficients, camera_intrinsics_image_size_used, masks_warped, reference_bgr_value_idxs, reference_bgr_cumsum));
+    unique_ptr<FrameStitcher> fs(new FrameStitcher(false, pano_offset_x, pano_offset_y, pano_width, pano_height, left_rotation, right_rotation, stitcher_queue, panoramic_packet_queue, cameras_params, camera_intrinsics_K, camera_intrinsics_distortion_coefficients, camera_intrinsics_image_size_used, masks_warped, reference_bgr_value_idxs, reference_bgr_cumsum));
     fs->start();
     frame_stitchers.push_back(move(fs));
 

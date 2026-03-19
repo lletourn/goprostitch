@@ -128,6 +128,8 @@ FrameStitcher::FrameStitcher(
     uint32_t crop_offset_y,
     uint32_t crop_width,
     uint32_t crop_height,
+    double left_rotation,
+    double right_rotation,
     ThreadSafeQueue<LeftRightPacket>& stitcher_queue,
     ThreadSafeQueue<PanoramicPacket>& output_queue,
     vector<detail::CameraParams> camera_params,
@@ -144,6 +146,8 @@ FrameStitcher::FrameStitcher(
   crop_offset_y_(crop_offset_y),
   crop_width_(crop_width),
   crop_height_(crop_height),
+  left_rotation_(left_rotation),
+  right_rotation_(right_rotation),
   stitcher_queue_(stitcher_queue),
   output_queue_(output_queue),
   camera_params_(camera_params),
@@ -239,6 +243,14 @@ void FrameStitcher::run() {
         convertMaps(straighten_map_x, straighten_map_y, straighten_map1, straighten_map2, CV_16SC2);
     }
 
+    if(left_rotation_ != 0) {
+        spdlog::info("[framestitching] Will rotate left image {} degrees", left_rotation_);
+    }
+    if(right_rotation_ != 0) {
+        spdlog::info("[framestitching] Will rotate right image {} degrees", right_rotation_);
+    }
+    Mat tmp_pre_rotation_left;
+    Mat tmp_pre_rotation_right;
     Mat tmp_left;
     Mat tmp_right;
     Mat panoramic_image_yuv;
@@ -253,24 +265,43 @@ void FrameStitcher::run() {
                 spdlog::trace("Creating left/right");
                 Mat left(left_right_packet->height, left_right_packet->width, CV_8UC3, left_right_packet->left_data.get());
                 Mat right(left_right_packet->height, left_right_packet->width, CV_8UC3, left_right_packet->right_data.get());
+                tmp_pre_rotation_left = left;
+                tmp_pre_rotation_right = right;
             } else if(input_pixel_format_ == PIX_FMT_YUV420_NV12) {
                 spdlog::trace("Creating left/right");
                 Mat left(left_right_packet->height * 3/2, left_right_packet->width, CV_8UC1, left_right_packet->left_data.get());
                 Mat right(left_right_packet->height * 3/2, left_right_packet->width, CV_8UC1, left_right_packet->right_data.get());
                 spdlog::trace("Converting from NV12 to BGR");
-                cvtColor(left, tmp_left, COLOR_YUV2BGR_NV12);
-                cvtColor(right, tmp_right, COLOR_YUV2BGR_NV12);
+                cvtColor(left, tmp_pre_rotation_left, COLOR_YUV2BGR_NV12);
+                cvtColor(right, tmp_pre_rotation_right, COLOR_YUV2BGR_NV12);
             } else if(input_pixel_format_ == PIX_FMT_YUV420_P) {
                 spdlog::trace("Creating left/right");
                 Mat left(left_right_packet->height * 3/2, left_right_packet->width, CV_8UC1, left_right_packet->left_data.get());
                 Mat right(left_right_packet->height * 3/2, left_right_packet->width, CV_8UC1, left_right_packet->right_data.get());
                 spdlog::trace("Converting from NV12 to BGR");
-                cvtColor(left, tmp_left, COLOR_YUV2BGR_I420);
-                cvtColor(right, tmp_right, COLOR_YUV2BGR_I420);
+                cvtColor(left, tmp_pre_rotation_left, COLOR_YUV2BGR_I420);
+                cvtColor(right, tmp_pre_rotation_right, COLOR_YUV2BGR_I420);
             } else {
                 spdlog::error("Unsupported pixel format: {}", (int)input_pixel_format_);
                 throw runtime_error("Unsupported pixel format.");
             }
+            if(left_rotation_ != 0) {
+                Point2f center = Point2f(left_right_packet->width / 2.0, left_right_packet->height / 2.0);
+                Mat M = getRotationMatrix2D(center, left_rotation_, 1.0);
+                warpAffine(tmp_pre_rotation_left, tmp_left, M, Size(left_right_packet->width, left_right_packet->height), INTER_LINEAR, BORDER_CONSTANT, (0, 0, 0));
+            } else {
+                tmp_left = tmp_pre_rotation_left;
+            }
+
+            if(right_rotation_ != 0) {
+                Point2f center = Point2f(left_right_packet->width / 2.0, left_right_packet->height / 2.0);
+                Mat M = getRotationMatrix2D(center, right_rotation_, 1.0);
+                warpAffine(tmp_pre_rotation_right, tmp_right, M, Size(left_right_packet->width, left_right_packet->height), INTER_LINEAR, BORDER_CONSTANT, (0, 0, 0));
+            } else {
+                tmp_right = tmp_pre_rotation_right;
+            }
+
+
             spdlog::trace("[framestitching] Combined undistort+warp remap");
             remap(tmp_left, warped_images[0], combined_map1[0], combined_map2[0], INTER_LINEAR, BORDER_REFLECT);
             remap(tmp_right, warped_images[1], combined_map1[1], combined_map2[1], INTER_LINEAR, BORDER_REFLECT);
