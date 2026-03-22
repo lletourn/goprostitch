@@ -38,7 +38,10 @@ Then you have a hex value of the frames since midnight. Just substract both to k
 
 .bashrc
 ```
-export FFMPEG_VERSION=7.1.3
+export PATH=/usr/local/cuda/bin:${PATH}
+export LD_LIBRARY_PATH=/usr/local/cuda/lib64:${LD_LIBRARY_PATH}
+
+export FFMPEG_VERSION=8.0.1
 export FFMPEG_INSTALL_DIR=${HOME}/software/ffmpeg-${FFMPEG_VERSION}
 export PATH=${FFMPEG_INSTALL_DIR}/bin:${PATH}
 export LD_LIBRARY_PATH=${FFMPEG_INSTALL_DIR}/lib:${LD_LIBRARY_PATH}
@@ -64,7 +67,7 @@ export PKG_CONFIG_PATH=${VMAF_INSTALL_DIR}/lib/x86_64-linux-gnu/pkgconfig:${PKG_
 ```
 
 ```
-sudo apt install -y pigz python3 yasm nasm libvpx-dev libopus-dev libssl-dev libfreetype6-dev libx264-dev libx265-dev libpython3-all-dev python3-dev python3-distutils pkg-config libopenblas-dev libeigen3-dev libxml2-dev rapidjson-dev zipmerge liblapack-dev build-essential cmake meson qt6-base-dev libqt6core5compat6-dev
+sudo apt install -y pigz yasm nasm libvpx-dev libopus-dev libssl-dev libfreetype6-dev libx264-dev libx265-dev python3.14-dev pkg-config libopenblas-dev libeigen3-dev libxml2-dev rapidjson-dev zipmerge liblapack-dev build-essential cmake meson qt6-base-dev libqt6core5compat6-dev
 
 mkdir ~/src
 cd src
@@ -72,11 +75,19 @@ cd src
 
 # 3rd party
 ```
-cd ~/src
+cd ~/Downloads
+
+wget https://developer.download.nvidia.com/compute/cuda/12.9.1/local_installers/cuda_12.9.1_575.57.08_linux.run
+sudo sh cuda_12*_linux.run
+
+wget https://developer.download.nvidia.com/compute/cudnn/redist/cudnn/linux-x86_64/cudnn-linux-x86_64-9.20.0.48_cuda12-archive.tar.xz
+tar xvf cudnn-linux-x86_64-9.20.0.48_cuda12-archive.tar.xz
+sudo cp cudnn-*-archive/include/cudnn*.h /usr/local/cuda/include
+sudo cp -P cudnn-*-archive/lib/libcudnn* /usr/local/cuda/lib64
 
 wget https://bootstrap.pypa.io/get-pip.py
-sudo python3 ./get-pip.py
-sudo python3 -m pip install -U --break-system-packages numpy Cython meson
+sudo python3.14 ./get-pip.py
+sudo python3.14 -m pip install -U --break-system-packages numpy Cython meson
 
 curl -L "https://github.com/Netflix/vmaf/archive/refs/tags/v3.0.0.tar.gz" --remote-name
 tar xvf vmaf-3.0.0.tar.gz
@@ -91,7 +102,7 @@ tar xvf nv-codec-headers-13.0.19.0.tar.gz
 cd nv-codec-headers-13.0.19.0
 make install PREFIX=${HOME}/software/nv-codec-headers-13.0.19.0
 
-wget https://ffmpeg.org/releases/ffmpeg-${FFMPEG_VERSION}.tar.gz -O ~/src/ffmpeg-${FFMPEG_VERSION}.tar.gz
+wget https://ffmpeg.org/releases/ffmpeg-${FFMPEG_VERSION}.tar.gz -O ffmpeg-${FFMPEG_VERSION}.tar.gz
 tar xvf ffmpeg-${FFMPEG_VERSION}.tar.gz
 cd ffmpeg-${FFMPEG_VERSION}
 ./configure --prefix=${HOME}/software/ffmpeg-${FFMPEG_VERSION} --enable-libxml2 --enable-libharfbuzz --enable-libfreetype --enable-gpl --enable-libx264 --enable-libx265 --enable-nonfree --enable-libopus --enable-libvpx --enable-openssl --enable-shared --enable-libsrt --enable-libpulse --enable-sdl2 --enable-nvenc --enable-ffnvcodec --enable-cuda-nvcc --enable-libnpp --extra-cflags=-I/usr/local/cuda/include --extra-ldflags=-L/usr/local/cuda/lib64 --disable-static
@@ -100,18 +111,35 @@ make -j $(nproc) && make install
 
 curl -L "https://github.com/gabime/spdlog/archive/refs/tags/v${SPDLOG_VERSION}.tar.gz" -o spdlog-${SPDLOG_VERSION}.tar.gz
 tar xvf spdlog-${SPDLOG_VERSION}.tar.gz
-cd cd spdlog-${SPDLOG_VERSION}
+cd spdlog-${SPDLOG_VERSION}
 rm -rf build ; mkdir build ; cd build ; cmake -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=${HOME}/software/spdlog-${SPDLOG_VERSION} ../ && make -j $(nproc) && make install
 
-curl -L "https://github.com/opencv/opencv/archive/refs/tags/${OPENCV_VERSION}.tar.gz" -o ~/src/opencv-${OPENCV_VERSION}.tar.gz
-curl -L "https://github.com/opencv/opencv_contrib/archive/refs/tags/${OPENCV_VERSION}.tar.gz" -o ~/src/opencv_contrib-${OPENCV_VERSION}.tar.gz
+curl -L "https://github.com/opencv/opencv/archive/refs/tags/${OPENCV_VERSION}.tar.gz" -o opencv-${OPENCV_VERSION}.tar.gz &
+curl -L "https://github.com/opencv/opencv_contrib/archive/refs/tags/${OPENCV_VERSION}.tar.gz" -o opencv_contrib-${OPENCV_VERSION}.tar.gz &
+wait
 tar xvf opencv-${OPENCV_VERSION}.tar.gz
 tar xvf opencv_contrib-${OPENCV_VERSION}.tar.gz
 cd opencv-${OPENCV_VERSION}
 
 # Add these on desktop
 # -DBUILD_EXAMPLES=ON -DINSTALL_C_EXAMPLES=ON -DINSTALL_BIN_EXAMPLES=ON -DWITH_GTK=OFF -DWITH_QT=ON -DWITH_OPENGL=ON
-rm -rf build ; mkdir build ; cd build ; cmake -DENABLE_CXX11=ON -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=${HOME}/software/opencv-${OPENCV_VERSION} -DWITH_TBB=ON -DBUILD_opencv_python2=OFF -DOPENCV_EXTRA_MODULES_PATH=${HOME}/src/opencv_contrib-${OPENCV_VERSION}/modules -DWITH_CUDA=ON -DWITH_NVCUVID=OFF -DWITH_NVCUVENC=OFF -DWITH_OPENCL=OFF -DOPENCV_GENERATE_PKGCONFIG=ON -DOPENCV_ENABLE_NONFREE=ON -DBUILD_opencv_rgbd=OFF ../
+rm -rf build ; mkdir build ; cd build ; cmake -DENABLE_CXX11=ON \
+-DCMAKE_BUILD_TYPE=Release \
+-DCMAKE_INSTALL_PREFIX=${HOME}/software/opencv-${OPENCV_VERSION} \
+-DWITH_TBB=ON \
+-DBUILD_opencv_python2=OFF \
+-DOPENCV_EXTRA_MODULES_PATH=${HOME}/Downloads/opencv_contrib-${OPENCV_VERSION}/modules \
+-DWITH_CUDA=ON \
+-DWITH_NVCUVID=OFF \
+-DWITH_NVCUVENC=OFF \
+-DWITH_OPENCL=OFF \
+-DOPENCV_GENERATE_PKGCONFIG=ON \
+-DOPENCV_ENABLE_NONFREE=ON \
+-DBUILD_opencv_rgbd=OFF \
+-DPYTHON3_EXECUTABLE=/usr/bin/python3.14 \
+-DPYTHON3_INCLUDE_DIR=/usr/include/python3.14 \
+-DPYTHON3_LIBRARY=/usr/lib/x86_64-linux-gnu/libpython3.14.so \
+../
 make -j $(nproc) && make install
 ```
 
