@@ -28,8 +28,7 @@ void process_videos(
     const uint16_t nb_encoding_threads,
     const double eta_refresh_rate,
     const int32_t encode_duration,
-    const bool fix_exposure,
-    const bool straighten
+    const bool fix_exposure
 ) {
 
     Mat camera_intrinsics_K;
@@ -47,9 +46,7 @@ void process_videos(
     vector<detail::CameraParams> cameras_params;
     vector<UMat> masks_warped;
     Rect rect;
-    double left_rotation;
-    double right_rotation;
-    readSeamData(camera_params_filename, cameras_params, masks_warped, rect, left_rotation, right_rotation);
+    readSeamData(camera_params_filename, cameras_params, masks_warped, rect);
     uint32_t pano_offset_x = rect.x;
     uint32_t pano_offset_y = rect.y;
     uint32_t pano_width = rect.width;
@@ -103,7 +100,7 @@ void process_videos(
 
     vector<unique_ptr<FrameStitcher>> frame_stitchers;
     for(uint16_t i=0; i < nb_stitch_workers; ++i) {
-        unique_ptr<FrameStitcher> fs(new FrameStitcher(use_gpu, pano_offset_x, pano_offset_y, pano_width, pano_height, left_rotation, right_rotation, stitcher_queue, output_encoder.getInPanoramicQueue(), cameras_params, camera_intrinsics_K, camera_intrinsics_distortion_coefficients, camera_intrinsics_image_size_used, masks_warped, reference_bgr_value_idxs, reference_bgr_cumsum, straighten));
+        unique_ptr<FrameStitcher> fs(new FrameStitcher(use_gpu, pano_offset_x, pano_offset_y, pano_width, pano_height, stitcher_queue, output_encoder.getInPanoramicQueue(), cameras_params, camera_intrinsics_K, camera_intrinsics_distortion_coefficients, camera_intrinsics_image_size_used, masks_warped, reference_bgr_value_idxs, reference_bgr_cumsum));
         fs->start();
         frame_stitchers.push_back(move(fs));
     }
@@ -214,7 +211,6 @@ int main(int argc, const char ** argv) {
         "{fixexposure | false | Fix whitebalance between cameras }"
         "{etarefreshrate | 60000 | Refreshrate of ETA in ms }"
         "{duration | -1 | Encode for this duration. -1 encode all of it (default) }"
-        "{straighten | false | Apply v/cos(theta) correction to straighten horizontal lines }"
     ;
     CommandLineParser parser(argc, argv, keys);
     parser.about("Seam finder");
@@ -236,8 +232,7 @@ int main(int argc, const char ** argv) {
     bool fix_exposure(parser.get<bool>("fixexposure"));
     double eta_refresh_rate(parser.get<double>("etarefreshrate"));
     int32_t duration(parser.get<int32_t>("duration"));
-    bool straighten(parser.get<bool>("straighten"));
 
-    process_videos(use_gpu, left_filename, right_filename, output_filename, left_video_offset, right_video_offset, camera_params_filename, camera_intrinsics_filename, nb_stitch_workers, nb_encoding_threads, eta_refresh_rate, duration, fix_exposure, straighten);
+    process_videos(use_gpu, left_filename, right_filename, output_filename, left_video_offset, right_video_offset, camera_params_filename, camera_intrinsics_filename, nb_stitch_workers, nb_encoding_threads, eta_refresh_rate, duration, fix_exposure);
     spdlog::info("Done");
 }

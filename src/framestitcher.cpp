@@ -128,8 +128,6 @@ FrameStitcher::FrameStitcher(
     uint32_t crop_offset_y,
     uint32_t crop_width,
     uint32_t crop_height,
-    double left_rotation,
-    double right_rotation,
     ThreadSafeQueue<LeftRightPacket>& stitcher_queue,
     ThreadSafeQueue<PanoramicPacket>& output_queue,
     vector<detail::CameraParams> camera_params,
@@ -138,16 +136,13 @@ FrameStitcher::FrameStitcher(
     const Size calibration_image_size,
     const vector<UMat>& image_masks,
     const vector<vector<uint32_t>>& reference_bgr_value_idxs,
-    const vector<vector<double>>& reference_bgr_cumsum,
-    bool straighten)
+    const vector<vector<double>>& reference_bgr_cumsum)
 : use_gpu_(use_gpu),
   match_histogram_(false),
   crop_offset_x_(crop_offset_x),
   crop_offset_y_(crop_offset_y),
   crop_width_(crop_width),
   crop_height_(crop_height),
-  left_rotation_(left_rotation),
-  right_rotation_(right_rotation),
   stitcher_queue_(stitcher_queue),
   output_queue_(output_queue),
   camera_params_(camera_params),
@@ -158,20 +153,7 @@ FrameStitcher::FrameStitcher(
   reference_bgr_value_idxs_(reference_bgr_value_idxs),
   reference_bgr_cumsum_(reference_bgr_cumsum),
   running_(false),
-  done_(false),
-  straighten_(straighten) {
-
-    // Find median focal length
-    vector<double> focals;
-    for (size_t i = 0; i < camera_params_.size(); ++i) {
-        focals.push_back(camera_params_[i].focal);
-    }
-
-    sort(focals.begin(), focals.end());
-    if (focals.size() % 2 == 1)
-        warped_image_scale_ = static_cast<float>(focals[focals.size() / 2]);
-    else
-        warped_image_scale_ = static_cast<float>(focals[focals.size() / 2 - 1] + focals[focals.size() / 2]) * 0.5f;
+  done_(false) {
 }
 
 
@@ -234,23 +216,6 @@ void FrameStitcher::run() {
     }
     spdlog::info("[framestitching] Combined undistortion and warp maps computed");
 
-    // Build straighten correction maps (combines correction + crop into one remap)
-    Mat straighten_map1, straighten_map2;
-    if (straighten_) {
-        Mat straighten_map_x, straighten_map_y;
-        compositor.buildStraightenMaps(warped_image_scale_, straighten_map_x, straighten_map_y,
-                                       crop_offset_x_, crop_offset_y_, crop_width_, crop_height_);
-        convertMaps(straighten_map_x, straighten_map_y, straighten_map1, straighten_map2, CV_16SC2);
-    }
-
-    if(left_rotation_ != 0) {
-        spdlog::info("[framestitching] Will rotate left image {} degrees", left_rotation_);
-    }
-    if(right_rotation_ != 0) {
-        spdlog::info("[framestitching] Will rotate right image {} degrees", right_rotation_);
-    }
-    Mat tmp_pre_rotation_left;
-    Mat tmp_pre_rotation_right;
     Mat tmp_left;
     Mat tmp_right;
     Mat panoramic_image_yuv;
@@ -265,42 +230,26 @@ void FrameStitcher::run() {
                 spdlog::trace("Creating left/right");
                 Mat left(left_right_packet->height, left_right_packet->width, CV_8UC3, left_right_packet->left_data.get());
                 Mat right(left_right_packet->height, left_right_packet->width, CV_8UC3, left_right_packet->right_data.get());
-                tmp_pre_rotation_left = left;
-                tmp_pre_rotation_right = right;
+                tmp_left = left;
+                tmp_right = right;
             } else if(input_pixel_format_ == PIX_FMT_YUV420_NV12) {
                 spdlog::trace("Creating left/right");
                 Mat left(left_right_packet->height * 3/2, left_right_packet->width, CV_8UC1, left_right_packet->left_data.get());
                 Mat right(left_right_packet->height * 3/2, left_right_packet->width, CV_8UC1, left_right_packet->right_data.get());
                 spdlog::trace("Converting from NV12 to BGR");
-                cvtColor(left, tmp_pre_rotation_left, COLOR_YUV2BGR_NV12);
-                cvtColor(right, tmp_pre_rotation_right, COLOR_YUV2BGR_NV12);
+                cvtColor(left, tmp_left, COLOR_YUV2BGR_NV12);
+                cvtColor(right, tmp_right, COLOR_YUV2BGR_NV12);
             } else if(input_pixel_format_ == PIX_FMT_YUV420_P) {
                 spdlog::trace("Creating left/right");
                 Mat left(left_right_packet->height * 3/2, left_right_packet->width, CV_8UC1, left_right_packet->left_data.get());
                 Mat right(left_right_packet->height * 3/2, left_right_packet->width, CV_8UC1, left_right_packet->right_data.get());
                 spdlog::trace("Converting from NV12 to BGR");
-                cvtColor(left, tmp_pre_rotation_left, COLOR_YUV2BGR_I420);
-                cvtColor(right, tmp_pre_rotation_right, COLOR_YUV2BGR_I420);
+                cvtColor(left, tmp_left, COLOR_YUV2BGR_I420);
+                cvtColor(right, tmp_right, COLOR_YUV2BGR_I420);
             } else {
                 spdlog::error("Unsupported pixel format: {}", (int)input_pixel_format_);
                 throw runtime_error("Unsupported pixel format.");
             }
-            if(left_rotation_ != 0) {
-                Point2f center = Point2f(left_right_packet->width / 2.0, left_right_packet->height / 2.0);
-                Mat M = getRotationMatrix2D(center, left_rotation_, 1.0);
-                warpAffine(tmp_pre_rotation_left, tmp_left, M, Size(left_right_packet->width, left_right_packet->height), INTER_LINEAR, BORDER_CONSTANT, (0, 0, 0));
-            } else {
-                tmp_left = tmp_pre_rotation_left;
-            }
-
-            if(right_rotation_ != 0) {
-                Point2f center = Point2f(left_right_packet->width / 2.0, left_right_packet->height / 2.0);
-                Mat M = getRotationMatrix2D(center, right_rotation_, 1.0);
-                warpAffine(tmp_pre_rotation_right, tmp_right, M, Size(left_right_packet->width, left_right_packet->height), INTER_LINEAR, BORDER_CONSTANT, (0, 0, 0));
-            } else {
-                tmp_right = tmp_pre_rotation_right;
-            }
-
 
             spdlog::trace("[framestitching] Combined undistort+warp remap");
             remap(tmp_left, warped_images[0], combined_map1[0], combined_map2[0], INTER_LINEAR, BORDER_REFLECT);
@@ -314,13 +263,7 @@ void FrameStitcher::run() {
             compositor.composePreWarped(warped_images, panoramic_image, left_right_packet->idx);
             spdlog::trace("[framestitching] Composed");
 
-            Mat cropped_image;
-            if (straighten_) {
-                spdlog::trace("[framestitching] Straighten + crop remap");
-                remap(panoramic_image, cropped_image, straighten_map1, straighten_map2, INTER_LINEAR, BORDER_CONSTANT);
-            } else {
-                cropped_image = Mat(panoramic_image, Range(crop_offset_y_, crop_offset_y_+crop_height_), Range(crop_offset_x_, crop_offset_x_+crop_width_));
-            }
+            Mat cropped_image(panoramic_image, Range(crop_offset_y_, crop_offset_y_+crop_height_), Range(crop_offset_x_, crop_offset_x_+crop_width_));
             spdlog::trace("[framestitching] Cropped pano");
 
             cvtColor(cropped_image, panoramic_image_yuv, COLOR_BGR2YUV_I420);

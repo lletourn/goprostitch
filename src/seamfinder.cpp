@@ -60,17 +60,46 @@ std::string type2str(int type) {
   return r;
 }
 
-void rotateImage(const Mat& src, Mat& dst, int width, int height, double angle) {
-    Point2f center = Point2f(width / 2.0, height / 2.0);
-    Mat M = getRotationMatrix2D(center, angle, 1.0);
-    warpAffine(src, dst, M, Size(width, height), INTER_LINEAR, BORDER_CONSTANT, (0, 0, 0));
-}
+bool estimateCameras(const string& features_type, const vector<Mat>& images, float overlap_fraction, const vector<PointPair>& point_pairs, vector<CameraParams>& cameras);
+void findSeams(const vector<Mat>& images, const vector<CameraParams>& cameras, vector<UMat>& masks_warped);
 
-void finding(const string& features_type, const vector<Mat>& src_images, float overlap_fraction, const vector<PointPair>& point_pairs, vector<CameraParams>& cameras, vector<UMat>& masks_warped);
+struct Tilt {
+    Mat G;                          // Global rotation applied to every camera: R <- G * R
+    Vec3d normal;                   // Plane (through the camera centre) containing the far boards base, pre-tilt world frame
+    vector<Point2f> board_points;   // Clicked points, in untilted panorama pixels
+    double rms_px;                  // RMS distance of the clicked rays to the fitted plane, in panorama pixels
+};
+
+bool pickTilt(const vector<Mat>& images, vector<CameraParams>& cameras, Tilt& tilt);
+Point panoramaTopLeft(const vector<Mat>& images, const vector<CameraParams>& cameras);
+
+// Where the far boards base lands in the initial crop box, as a fraction of the box height from its top
+constexpr double kCropBoardsRowFraction = 0.15;
 
 Rect cropPano(const Mat& panorama, const Rect& initial_rect);
 
-void writeStitchingData(const string& cameras_params_filename, const vector<CameraParams>& cameras, const vector<UMat>& masks_warped, const Rect& crop_rect, double left_rotation, double right_rotation) {
+// Reusing an existing camparams file: only the crop changes, everything else (tilt included) is kept as is
+void updateCrop(const string& cameras_params_filename, const Rect& crop_rect) {
+    rapidjson::Document stitching_doc;
+    {
+        ifstream ifs(cameras_params_filename);
+        IStreamWrapper isw(ifs);
+        stitching_doc.ParseStream(isw);
+    }
+
+    Value& pano_crop = stitching_doc["crop"];
+    pano_crop["x"].SetInt(crop_rect.x);
+    pano_crop["y"].SetInt(crop_rect.y);
+    pano_crop["w"].SetInt(crop_rect.width);
+    pano_crop["h"].SetInt(crop_rect.height);
+
+    ofstream ofs(cameras_params_filename);
+    OStreamWrapper osw(ofs);
+    Writer<OStreamWrapper> writer(osw);
+    stitching_doc.Accept(writer);
+}
+
+void writeStitchingData(const string& cameras_params_filename, const vector<CameraParams>& cameras, const vector<UMat>& masks_warped, const Rect& crop_rect, const Tilt& tilt) {
     rapidjson::Document stitching_doc(kObjectType);
 
     Value cameras_doc(kArrayType);
@@ -127,8 +156,30 @@ void writeStitchingData(const string& cameras_params_filename, const vector<Came
     pano_crop.AddMember("h", crop_rect.height, stitching_doc.GetAllocator());
     stitching_doc.AddMember("crop", pano_crop, stitching_doc.GetAllocator());
 
-    stitching_doc.AddMember("left_rotation", left_rotation, stitching_doc.GetAllocator());
-    stitching_doc.AddMember("right_rotation", right_rotation, stitching_doc.GetAllocator());
+    // Informational only: the tilt is already baked into each camera's R
+    Value tilt_doc(kObjectType);
+    Value G(kArrayType);
+    for(int i = 0; i < 3; ++i) {
+        Value G_row(kArrayType);
+        for(int j = 0; j < 3; ++j)
+            G_row.PushBack(Value(tilt.G.at<double>(i, j)), stitching_doc.GetAllocator());
+        G.PushBack(G_row, stitching_doc.GetAllocator());
+    }
+    tilt_doc.AddMember("G", G, stitching_doc.GetAllocator());
+    Value normal(kArrayType);
+    for(int i = 0; i < 3; ++i)
+        normal.PushBack(Value(tilt.normal[i]), stitching_doc.GetAllocator());
+    tilt_doc.AddMember("normal", normal, stitching_doc.GetAllocator());
+    Value board_points(kArrayType);
+    for(const Point2f& pt : tilt.board_points) {
+        Value point(kObjectType);
+        point.AddMember("x", Value(pt.x), stitching_doc.GetAllocator());
+        point.AddMember("y", Value(pt.y), stitching_doc.GetAllocator());
+        board_points.PushBack(point, stitching_doc.GetAllocator());
+    }
+    tilt_doc.AddMember("board_points", board_points, stitching_doc.GetAllocator());
+    tilt_doc.AddMember("rms_px", Value(tilt.rms_px), stitching_doc.GetAllocator());
+    stitching_doc.AddMember("tilt", tilt_doc, stitching_doc.GetAllocator());
 
     ofstream ofs(cameras_params_filename);
     OStreamWrapper osw(ofs);
@@ -148,8 +199,6 @@ int main(int argc, char* argv[]) {
         "{help h usage ? | | print this message }"
         "{left |<none>| Left image }"
         "{right |<none>| Right image }"
-        "{leftrotation |0.0| Left image rotation }"
-        "{rightrotation |0.0| Right image rotation }"
         "{keypoints | | Left-Right keypoints json filename}"
         "{output |<none>| Output panorama }"
         "{camparams | | Camera parameter filename }"
@@ -167,16 +216,7 @@ int main(int argc, char* argv[]) {
         return 0;
     }
 
-    double left_rotation = parser.get<double>("leftrotation");
-    double right_rotation = parser.get<double>("rightrotation");
-    Mat tmp_l = imread(parser.get<string>("left"));
-    Mat tmp_r = imread(parser.get<string>("right"));
-    if(left_rotation != 0)
-        rotateImage(tmp_l, tmp_l, tmp_l.cols, tmp_l.rows, left_rotation);
-    if(right_rotation != 0)
-        rotateImage(tmp_r, tmp_r, tmp_r.cols, tmp_r.rows, right_rotation);
-
-    vector<Mat> images = {tmp_l, tmp_r};
+    vector<Mat> images = {imread(parser.get<string>("left")), imread(parser.get<string>("right"))};
     vector<Size> images_size = {images[0].size(), images[1].size()};
     string result_name = parser.get<string>("output");
 
@@ -188,17 +228,16 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
+    const bool find_cam_params = parser.get<bool>("findcamparams");
     vector<CameraParams> cameras;
     vector<UMat> masks_warped;
-    // Negative position means "centre the crop box once the panorama is known"
-    Rect crop_rect(-1, -1, crop_size.width, crop_size.height);
+    Tilt tilt;
+    Rect crop_rect(0, 0, crop_size.width, crop_size.height);
 
-    if(!parser.get<bool>("findcamparams")) {
+    if(!find_cam_params) {
         spdlog::info("From cameras params");
         Rect saved_rect;
-        double left_rotation;
-        double right_rotation;
-        readSeamData(parser.get<string>("camparams"), cameras, masks_warped, saved_rect, left_rotation, right_rotation);
+        readSeamData(parser.get<string>("camparams"), cameras, masks_warped, saved_rect);
         crop_rect.x = saved_rect.x;
         crop_rect.y = saved_rect.y;
     } else {
@@ -214,7 +253,11 @@ int main(int argc, char* argv[]) {
         vector<PointPair> point_pairs;
         if(parser.has("keypoints"))
             point_pairs = readPointPairs(parser.get<string>("keypoints"));
-        finding(features_type, images, overlap_fraction, point_pairs, cameras, masks_warped);
+        if(!estimateCameras(features_type, images, overlap_fraction, point_pairs, cameras))
+            return 1;
+        if(!pickTilt(images, cameras, tilt))
+            return 1;
+        findSeams(images, cameras, masks_warped);
     }
 
     Mat output_image;
@@ -229,13 +272,18 @@ int main(int argc, char* argv[]) {
         spdlog::error("Panorama {}x{} is smaller than the crop size {}x{}", output_image.cols, output_image.rows, crop_size.width, crop_size.height);
         return 1;
     }
-    if(crop_rect.x < 0 || crop_rect.y < 0) {
+    if(find_cam_params) {
+        // The far boards base now sits on the cylinder's equator (v = 0)
+        const int boards_row = -panoramaTopLeft(images, cameras).y;
         crop_rect.x = (output_image.cols - crop_size.width) / 2;
-        crop_rect.y = (output_image.rows - crop_size.height) / 2;
+        crop_rect.y = boards_row - cvRound(kCropBoardsRowFraction * crop_size.height);
     }
 
     Rect rect = cropPano(output_image, crop_rect);
-    writeStitchingData(parser.get<string>("camparams"), cameras, masks_warped, rect, left_rotation, right_rotation);
+    if(find_cam_params)
+        writeStitchingData(parser.get<string>("camparams"), cameras, masks_warped, rect, tilt);
+    else
+        updateCrop(parser.get<string>("camparams"), rect);
 }
 
 // Fixed-size crop box; the arrows move the whole box 1px at a time, clamped to the panorama.
@@ -400,32 +448,25 @@ void featurePairManual(const vector<PointPair>& point_pairs, const vector<Size>&
     pairwise_matches.push_back(match_info);
 }
 
-void finding(const string& features_type, const vector<Mat>& src_images, float overlap_fraction, const vector<PointPair>& point_pairs, vector<CameraParams>& cameras, vector<UMat>& masks_warped) {
+bool estimateCameras(const string& features_type, const vector<Mat>& images, float overlap_fraction, const vector<PointPair>& point_pairs, vector<CameraParams>& cameras) {
 float conf_thresh = 0.1f;
 string ba_cost_func = "ray";
 string ba_refine_mask = "xxxxx";
 bool do_wave_correct = true;
 WaveCorrectKind wave_correct = detail::WAVE_CORRECT_HORIZ;
-bool save_graph = false;
-std::string save_graph_to;
-string seam_find_type = "voronoi";
 
     // Check if have enough images
-    int num_images = static_cast<int>(src_images.size());
+    int num_images = static_cast<int>(images.size());
     if (num_images < 2) {
-        spdlog::info("Need more images");
+        spdlog::error("Need more images");
+        return false;
     }
 
     vector<ImageFeatures> features(num_images);
     vector<MatchesInfo> pairwise_matches;
-    vector<Mat> images(num_images);
     vector<Size> full_img_sizes(num_images);
-
-    spdlog::info("Built rectifying maps");
-    for (int i = 0; i < num_images; ++i) {
-        images[i] = src_images[i].clone();
+    for (int i = 0; i < num_images; ++i)
         full_img_sizes[i] = images[i].size();
-    }
 
     if(point_pairs.empty())
         featurePairAuto(features_type, images, conf_thresh, overlap_fraction, features, pairwise_matches);
@@ -437,7 +478,8 @@ string seam_find_type = "voronoi";
 
     spdlog::info("Generate estimates");
     if (!(*estimator)(features, pairwise_matches, cameras)) {
-        cout << "Homography estimation failed.\n";
+        spdlog::error("Homography estimation failed");
+        return false;
     }
 
     spdlog::info("Adjust cameras");
@@ -466,10 +508,9 @@ string seam_find_type = "voronoi";
     if (ba_refine_mask[4] == 'x') refine_mask(1,2) = 1;
     adjuster->setRefinementMask(refine_mask);
     if (!(*adjuster)(features, pairwise_matches, cameras)) {
-        cout << "Camera parameters adjusting failed.\n";
+        spdlog::error("Camera parameters adjusting failed");
+        return false;
     }
-
-    float warped_image_scale = compute_warped_image_scale(cameras);
 
     if (do_wave_correct)
     {
@@ -481,6 +522,15 @@ string seam_find_type = "voronoi";
         for (size_t i = 0; i < cameras.size(); ++i)
             cameras[i].R = rmats[i];
     }
+
+    return true;
+}
+
+void findSeams(const vector<Mat>& images, const vector<CameraParams>& cameras, vector<UMat>& masks_warped) {
+string seam_find_type = "voronoi";
+
+    int num_images = static_cast<int>(images.size());
+    float warped_image_scale = compute_warped_image_scale(cameras);
 
     spdlog::info("Warping images (auxiliary)... ");
 
@@ -550,10 +600,236 @@ string seam_find_type = "voronoi";
 
     for(const auto& cp : cameras)
         cout << "Initial camera intrinsics:\nK:\n" << cp.K() << "\nR:\n" << cp.R << endl;
-    spdlog::info("GC");
-    // Release unused memory
-    images.clear();
-    images_warped.clear();
-    images_warped_f.clear();
-    masks.clear();
+}
+
+// Top-left of the cylindrical panorama in warped (u, v) coordinates, same as ImageCompositing's output origin
+Point panoramaTopLeft(const vector<Mat>& images, const vector<CameraParams>& cameras) {
+    Ptr<RotationWarper> warper = makePtr<cv::CylindricalWarper>()->create(compute_warped_image_scale(cameras));
+    Point top_left(numeric_limits<int>::max(), numeric_limits<int>::max());
+    for(size_t i = 0; i < images.size(); ++i) {
+        Mat K;
+        cameras[i].K().convertTo(K, CV_32F);
+        Rect roi = warper->warpRoi(images[i].size(), K, cameras[i].R);
+        top_left.x = std::min(top_left.x, roi.x);
+        top_left.y = std::min(top_left.y, roi.y);
+    }
+    return top_left;
+}
+
+// Quick unblended panorama, only used to pick the far boards and check the tilt
+Mat renderPreview(const vector<Mat>& images, const vector<CameraParams>& cameras, Point& top_left) {
+    Ptr<RotationWarper> warper = makePtr<cv::CylindricalWarper>()->create(compute_warped_image_scale(cameras));
+    vector<Mat> warped(images.size());
+    vector<Mat> warped_masks(images.size());
+    vector<Point> corners(images.size());
+    for(size_t i = 0; i < images.size(); ++i) {
+        Mat K;
+        cameras[i].K().convertTo(K, CV_32F);
+        corners[i] = warper->warp(images[i], K, cameras[i].R, INTER_LINEAR, BORDER_CONSTANT, warped[i]);
+        Mat mask(images[i].size(), CV_8U, Scalar(255));
+        warper->warp(mask, K, cameras[i].R, INTER_NEAREST, BORDER_CONSTANT, warped_masks[i]);
+    }
+
+    vector<Size> sizes(images.size());
+    for(size_t i = 0; i < images.size(); ++i)
+        sizes[i] = warped[i].size();
+    Rect pano_roi = resultRoi(corners, sizes);
+    top_left = pano_roi.tl();
+
+    Mat pano(pano_roi.size(), CV_8UC3, Scalar::all(0));
+    for(size_t i = 0; i < images.size(); ++i)
+        warped[i].copyTo(pano(Rect(corners[i] - top_left, sizes[i])), warped_masks[i]);
+    return pano;
+}
+
+// Viewing ray (pre-tilt world frame) of a panorama pixel: inverse of the cylindrical projection
+Vec3d panoPixelToRay(const Point2f& pt, const Point& top_left, float scale) {
+    const double theta = (pt.x + top_left.x) / scale;
+    const double h = (pt.y + top_left.y) / scale;
+    return normalize(Vec3d(sin(theta), h, cos(theta)));
+}
+
+// Plane through the camera centre that best contains the rays: normal is the smallest eigenvector of sum(d d^T)
+void fitBoardsPlane(const vector<Point2f>& points, const Point& top_left, float scale, Vec3d& normal, double& rms_px) {
+    Matx33d scatter = Matx33d::zeros();
+    vector<Vec3d> rays;
+    for(const Point2f& pt : points) {
+        Vec3d d = panoPixelToRay(pt, top_left, scale);
+        scatter += d * d.t();
+        rays.push_back(d);
+    }
+
+    Mat eigenvalues, eigenvectors;
+    eigen(Mat(scatter), eigenvalues, eigenvectors);
+    normal = Vec3d(eigenvectors.at<double>(2, 0), eigenvectors.at<double>(2, 1), eigenvectors.at<double>(2, 2));
+    // Keep the cylinder axis pointing the same way as the current one, otherwise the panorama flips upside down
+    if(normal[1] < 0)
+        normal = -normal;
+
+    double sum_sq = 0.0;
+    for(const Vec3d& d : rays) {
+        const double err_px = asin(std::min(1.0, std::abs(normal.dot(d)))) * scale;
+        sum_sq += err_px * err_px;
+    }
+    rms_px = sqrt(sum_sq / rays.size());
+}
+
+// Rotation that maps the boards plane normal onto the cylinder axis (y). The spin around that axis is free:
+// pick it so the bisector of the cameras' viewing directions lands at theta = 0, keeping the panorama centred.
+Mat buildTilt(const Vec3d& normal, const vector<CameraParams>& cameras) {
+    Vec3d forward(0, 0, 0);
+    for(const CameraParams& camera : cameras) {
+        Mat R;
+        camera.R.convertTo(R, CV_64F);
+        forward += normalize(Vec3d(R.at<double>(0, 2), R.at<double>(1, 2), R.at<double>(2, 2)));
+    }
+    Vec3d z = normalize(forward - forward.dot(normal) * normal);
+    Vec3d x = normal.cross(z);
+
+    Mat G(3, 3, CV_64F);
+    for(int j = 0; j < 3; ++j) {
+        G.at<double>(0, j) = x[j];
+        G.at<double>(1, j) = normal[j];
+        G.at<double>(2, j) = z[j];
+    }
+    return G;
+}
+
+struct BoardPicker {
+    vector<Point2f> points;
+    bool changed = true;
+};
+
+void onBoardClick(int event, int x, int y, int, void* userdata) {
+    if(event != EVENT_LBUTTONDOWN)
+        return;
+    BoardPicker* picker = static_cast<BoardPicker*>(userdata);
+    picker->points.emplace_back(static_cast<float>(x), static_cast<float>(y));
+    picker->changed = true;
+}
+
+bool isEnterKey(int key) {
+    return key == 13 || key == 10 || key == 65293 || key == 65421;
+}
+
+void drawBanner(Mat& image, const string& text) {
+    const double font_scale = image.cols / 2000.0;
+    const int thickness = std::max(1, cvRound(font_scale * 2));
+    putText(image, text, Point(20, cvRound(60 * font_scale)), FONT_HERSHEY_SIMPLEX, font_scale, Scalar(0, 0, 0), thickness * 4);
+    putText(image, text, Point(20, cvRound(60 * font_scale)), FONT_HERSHEY_SIMPLEX, font_scale, Scalar(255, 255, 255), thickness);
+}
+
+// Clicks on the untilted preview; returns false if aborted with ESC
+bool clickBoardPoints(const Mat& preview, const Point& top_left, float scale, vector<Point2f>& points, Vec3d& normal, double& rms_px) {
+    BoardPicker picker;
+    picker.points = points;
+    namedWindow("Tilt", WINDOW_NORMAL);
+    resizeWindow("Tilt", 1920, 720);
+    setMouseCallback("Tilt", onBoardClick, &picker);
+
+    const int radius = std::max(4, preview.cols / 600);
+    while(true) {
+        if(picker.changed) {
+            picker.changed = false;
+            Mat display = preview.clone();
+            string status = "Click the BASE of the far boards, left to right. Backspace: undo, Enter: compute (min 3), Esc: abort.";
+
+            if(picker.points.size() >= 2) {
+                fitBoardsPlane(picker.points, top_left, scale, normal, rms_px);
+                // Projection of the fitted plane on the current cylinder
+                vector<Point> curve;
+                if(std::abs(normal[1]) > 1e-9) {
+                    for(int px = 0; px < display.cols; px += 4) {
+                        const double theta = (px + top_left.x) / scale;
+                        const double h = -(normal[0] * sin(theta) + normal[2] * cos(theta)) / normal[1];
+                        curve.emplace_back(px, cvRound(h * scale - top_left.y));
+                    }
+                }
+                polylines(display, curve, false, Scalar(0, 255, 255), std::max(2, radius / 2));
+                status += cv::format("  Points: %zu  RMS: %.1f px", picker.points.size(), rms_px);
+                spdlog::info("Boards fit: {} points, RMS {:.2f} px", picker.points.size(), rms_px);
+            }
+            for(const Point2f& pt : picker.points)
+                circle(display, pt, radius, Scalar(0, 0, 255), FILLED);
+
+            drawBanner(display, status);
+            imshow("Tilt", display);
+        }
+
+        int key = waitKeyEx(30);
+        if(key == -1 || key == 65535)
+            continue;
+        if(key == 27) {
+            destroyWindow("Tilt");
+            return false;
+        } else if(key == 8 || key == 65288) { // Backspace
+            if(!picker.points.empty()) {
+                picker.points.pop_back();
+                picker.changed = true;
+            }
+        } else if(isEnterKey(key)) {
+            if(picker.points.size() >= 3)
+                break;
+            spdlog::warn("Need at least 3 points on the far boards, have {}", picker.points.size());
+        }
+    }
+
+    setMouseCallback("Tilt", nullptr);
+    points = picker.points;
+    return true;
+}
+
+bool pickTilt(const vector<Mat>& images, vector<CameraParams>& cameras, Tilt& tilt) {
+    const float scale = compute_warped_image_scale(cameras);
+    vector<Mat> untilted_R;
+    for(const CameraParams& camera : cameras)
+        untilted_R.push_back(camera.R.clone());
+
+    Point untilted_top_left;
+    Mat untilted_preview = renderPreview(images, cameras, untilted_top_left);
+
+    vector<Point2f> points;
+    while(true) {
+        Vec3d normal;
+        double rms_px = 0.0;
+        if(!clickBoardPoints(untilted_preview, untilted_top_left, scale, points, normal, rms_px))
+            return false;
+
+        Mat G = buildTilt(normal, cameras);
+        for(size_t i = 0; i < cameras.size(); ++i) {
+            Mat R;
+            untilted_R[i].convertTo(R, CV_64F);
+            Mat tilted = G * R;
+            tilted.convertTo(cameras[i].R, CV_32F);
+        }
+        spdlog::info("Tilt normal: [{:.5f}, {:.5f}, {:.5f}], RMS {:.2f} px", normal[0], normal[1], normal[2], rms_px);
+
+        Point tilted_top_left;
+        Mat tilted_preview = renderPreview(images, cameras, tilted_top_left);
+        const int boards_row = -tilted_top_left.y;
+        line(tilted_preview, Point(0, boards_row), Point(tilted_preview.cols - 1, boards_row), Scalar(0, 255, 255), std::max(2, tilted_preview.cols / 2000));
+        drawBanner(tilted_preview, "Far boards base should follow the line. Enter: accept, R: re-pick, Esc: abort.");
+        imshow("Tilt", tilted_preview);
+
+        int key;
+        do {
+            key = waitKeyEx(30);
+        } while(!isEnterKey(key) && key != 27 && key != 'r' && key != 'R');
+
+        if(isEnterKey(key)) {
+            destroyWindow("Tilt");
+            tilt.G = G;
+            tilt.normal = normal;
+            tilt.board_points = points;
+            tilt.rms_px = rms_px;
+            return true;
+        }
+
+        for(size_t i = 0; i < cameras.size(); ++i)
+            cameras[i].R = untilted_R[i].clone();
+        if(key == 27) {
+            destroyWindow("Tilt");
+            return false;
+        }
+    }
 }
