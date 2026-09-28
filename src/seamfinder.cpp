@@ -68,7 +68,7 @@ void rotateImage(const Mat& src, Mat& dst, int width, int height, double angle) 
 
 void finding(const string& features_type, const vector<Mat>& src_images, float overlap_fraction, const vector<PointPair>& point_pairs, vector<CameraParams>& cameras, vector<UMat>& masks_warped);
 
-Rect cropPano(const Mat& panorama);
+Rect cropPano(const Mat& panorama, const Rect& initial_rect);
 
 void writeStitchingData(const string& cameras_params_filename, const vector<CameraParams>& cameras, const vector<UMat>& masks_warped, const Rect& crop_rect, double left_rotation, double right_rotation) {
     rapidjson::Document stitching_doc(kObjectType);
@@ -156,6 +156,7 @@ int main(int argc, char* argv[]) {
         "{findcamparams | false | Generate camera parameters or read them from the file }"
         "{featuresfinder | sift | Features finder to use. sift, surf, orb}"
         "{overlapfraction | 0.25 | Fraction of each image's X range to search for features (kept strip width); left keeps the rightmost fraction, right keeps the leftmost }"
+        "{cropsize | 4730x1630 | Output crop size WxH }"
     ;
 
     CommandLineParser parser(argc, argv, keys);
@@ -179,15 +180,27 @@ int main(int argc, char* argv[]) {
     vector<Size> images_size = {images[0].size(), images[1].size()};
     string result_name = parser.get<string>("output");
 
+    Size crop_size;
+    char crop_sep = 0;
+    istringstream crop_ss(parser.get<string>("cropsize"));
+    if(!(crop_ss >> crop_size.width >> crop_sep >> crop_size.height) || (crop_sep != 'x' && crop_sep != 'X') || crop_size.width <= 0 || crop_size.height <= 0) {
+        spdlog::error("Invalid cropsize '{}', expected WxH", parser.get<string>("cropsize"));
+        return 1;
+    }
+
     vector<CameraParams> cameras;
     vector<UMat> masks_warped;
+    // Negative position means "centre the crop box once the panorama is known"
+    Rect crop_rect(-1, -1, crop_size.width, crop_size.height);
 
     if(!parser.get<bool>("findcamparams")) {
         spdlog::info("From cameras params");
-        Rect rect;
+        Rect saved_rect;
         double left_rotation;
         double right_rotation;
-        readSeamData(parser.get<string>("camparams"), cameras, masks_warped, rect, left_rotation, right_rotation);
+        readSeamData(parser.get<string>("camparams"), cameras, masks_warped, saved_rect, left_rotation, right_rotation);
+        crop_rect.x = saved_rect.x;
+        crop_rect.y = saved_rect.y;
     } else {
         spdlog::info("Generate camera params");
         string features_type = parser.get<string>("featuresfinder");
@@ -212,119 +225,62 @@ int main(int argc, char* argv[]) {
 
     imwrite(result_name, output_image);
 
-    Rect rect = cropPano(output_image);
+    if(output_image.cols < crop_size.width || output_image.rows < crop_size.height) {
+        spdlog::error("Panorama {}x{} is smaller than the crop size {}x{}", output_image.cols, output_image.rows, crop_size.width, crop_size.height);
+        return 1;
+    }
+    if(crop_rect.x < 0 || crop_rect.y < 0) {
+        crop_rect.x = (output_image.cols - crop_size.width) / 2;
+        crop_rect.y = (output_image.rows - crop_size.height) / 2;
+    }
+
+    Rect rect = cropPano(output_image, crop_rect);
     writeStitchingData(parser.get<string>("camparams"), cameras, masks_warped, rect, left_rotation, right_rotation);
 }
 
-Rect cropPano(const Mat& panorama) {
-    int x1 = 247;
-    int y1 = 277;
-    int x2 = x1+4730;
-    int y2 = y1+1630;
+// Fixed-size crop box; the arrows move the whole box 1px at a time, clamped to the panorama.
+Rect cropPano(const Mat& panorama, const Rect& initial_rect) {
+    const int max_x = panorama.cols - initial_rect.width;
+    const int max_y = panorama.rows - initial_rect.height;
+    Rect rect = initial_rect;
+    rect.x = std::clamp(rect.x, 0, max_x);
+    rect.y = std::clamp(rect.y, 0, max_y);
 
     namedWindow("Pano", WINDOW_NORMAL);
     resizeWindow("Pano", 1920, 720);
 
-    cout << "Rect: " << Rect(x1, y1, x2-x1, y2-y1) << endl;
-    Mat tmp = panorama.clone();
-    rectangle(tmp, Rect(x1, y1, x2-x1, y2-y1), Scalar(0,255,0), 5);
-    imshow("Pano", tmp);
-    char ver = 't';
-    char hor = 'l';
+    bool redraw = true;
     while(true) {
-        int key = waitKeyEx(30);
-
-        // modifier keys are flags starting at 0x10000
-        bool redraw = false;
-        bool shiftPressed = key & 1 << 16;
-        bool ctrlPressed = key & 1 << 18;
-
-        //key = key & 0xffff;
-        // Arrows == values > 60k...so for keybord, use <128 from the ASCII table
-        if (key != -1 && key != 65535) {
-            cout << "Key: " << key << endl;
-            if (key == 13 || key == 27 || key == 10) { // CR, ESC, or LF
-                break;
-            } else if(key == 't' || key == 'T') {
-                ver = 't';
-                cout << "Ver: " << ver << endl;
-            } else if(key == 'b' || key == 'B') {
-                ver = 'b';
-                cout << "Ver: " << ver << endl;
-            } else if(key == 'l' || key == 'L') {
-                hor = 'l';
-                cout << "Hor: " << hor << endl;
-            } else if(key == 'r' || key == 'R') {
-                hor = 'r';
-                cout << "Hor: " << hor << endl;
-            } else if(key == 65361) { // LEFT
-                cout << " Left" << endl;
-                cout << "Hor: " << hor << endl;
-                if(hor == 'l')
-                    x1--;
-                else
-                    x2--;
-
-                if(x1 < 0)
-                    x1 = 0;
-                if(x2 < 0)
-                    x2 = x1;
-                if(x2 <= x1)
-                    x2 = x1+1;
-            } else if(key == 65362) {
-                cout << "UP" << endl;
-                if(ver == 't')
-                    y1--;
-                else
-                    y2--;
-
-                if(y1 < 0)
-                    y1 = 0;
-                if(y2 < 0)
-                    y2 = y1;
-                if(y2 <= y1)
-                    y2 = y1+1;
-            } else if(key == 65363) { // Right
-                cout << " Right" << endl;
-                cout << "Hor: " << hor << endl;
-                if(hor == 'l')
-                    x1++;
-                else
-                    x2++;
-
-                if(x2 >= panorama.size().width)
-                    x2 = panorama.size().width-1;
-                if(x1 >= panorama.size().width)
-                    x1 = x2;
-                if(x1 >= x2)
-                    x1 = x2-1;
-            } else if(key == 65364) {
-                cout << "Down" << endl;
-                if(ver == 't')
-                    y1++;
-                else
-                    y2++;
-
-                if(y2 >= panorama.size().height)
-                    y2 = panorama.size().height-1;
-                if(y1 >= panorama.size().height)
-                    y1 = y2;
-                if(y1 >= y2)
-                    y1 = y2-1;
-            }
-            redraw = true;
-        }
         if(redraw) {
-            Rect rect(x1, y1, x2-x1, y2-y1);
             cout << "Rect: " << rect << endl;
             Mat tmp = panorama.clone();
             rectangle(tmp, rect, Scalar(0,255,0), 5);
             imshow("Pano", tmp);
+            redraw = false;
         }
+
+        int key = waitKeyEx(30);
+        if(key == -1 || key == 65535)
+            continue;
+
+        if(key == 13 || key == 27 || key == 10) { // CR, ESC, or LF
+            break;
+        } else if(key == 65361) { // Left
+            rect.x = std::max(rect.x - 1, 0);
+        } else if(key == 65362) { // Up
+            rect.y = std::max(rect.y - 1, 0);
+        } else if(key == 65363) { // Right
+            rect.x = std::min(rect.x + 1, max_x);
+        } else if(key == 65364) { // Down
+            rect.y = std::min(rect.y + 1, max_y);
+        } else {
+            continue;
+        }
+        redraw = true;
     }
     destroyAllWindows();
 
-    return Rect(x1, y1, x2-x1, y2-y1);
+    return rect;
 }
 
 void featurePairAuto(const string& features_type, const vector<Mat>& images, float conf_thresh, float overlap_fraction, vector<ImageFeatures>& features, vector<MatchesInfo>& pairwise_matches) {
