@@ -137,9 +137,9 @@ void OutputEncoder::init_video() {
         video_codec_ctx_->max_b_frames = 3;
         // video_codec_ctx_->profile = NV_ENC_PROFILE_HEVC_MAIN;  NOT ACCESSIBLE PUBLICALY. Use codec priv_data
         // video_codec_ctx_->level = NV_ENC_LEVEL_HEVC_51; NOT ACCESSIBLE PUBLICALY. Use codec priv_data
-        video_codec_ctx_->qmin = 24;
-        video_codec_ctx_->qmax = 51;
         video_codec_ctx_->rc_buffer_size = 20*1024*1024;
+        av_opt_set(video_codec_ctx_->priv_data, "qmin", "24", 0);
+        av_opt_set(video_codec_ctx_->priv_data, "qmax", "51", 0);
         av_opt_set(video_codec_ctx_->priv_data, "preset", "p5", 0);
         av_opt_set(video_codec_ctx_->priv_data, "profile", "main", 0);
         av_opt_set(video_codec_ctx_->priv_data, "level", "5.1", 0);

@@ -169,7 +169,7 @@ int main(int argc, char *argv[]) {
 
     uint32_t img_idx=0;
     Mat imageRsz;
-    //int frames[]={1441,1443,1473,1547,1593,1639,1661,1737,1825,1873,1927,1983,2037,2097,2163,2981};
+    int frames[]={0,164,294,484,627,710,1002,1174,1252,1389,1610,1689,2063,2109,2157,2330,2431,2861,2941};
     int arr_idx=0;
     Size imageSize;
     while(inputVideo.grab()) {
@@ -177,10 +177,10 @@ int main(int argc, char *argv[]) {
             img_idx++;
             continue;
         }
-        //if(img_idx != frames[arr_idx]) {
-        //    img_idx++;
-        //    continue;
-        //}
+        if(img_idx != frames[arr_idx]) {
+            img_idx++;
+            continue;
+        }
         ++arr_idx;
 
         Mat image, imageCopy;
@@ -212,19 +212,20 @@ int main(int argc, char *argv[]) {
         putText(imageCopy, "Press 'c' to add current frame. 'ESC' to finish and calibrate",
                 Point(10, 20), FONT_HERSHEY_SIMPLEX, 0.5, Scalar(255, 0, 0), 2);
 
-        resize(imageCopy, imageRsz, Size(1920,1080));
+	resize(imageCopy, imageRsz, Size(1920,1080));
         imshow("out", imageRsz);
-        char key = (char)waitKey();
-        if(key == 27) break;
-        if(key == 'c' && ids.size() > 0) {
+        char key = (char)waitKey(1);
+        //if(key == 27) break;
+        //if(key == 'c' && ids.size() > 0) {
+	if(true) {
             cout << "Frame captured: " << img_idx << endl;
             allCorners.push_back(corners);
             allIds.push_back(ids);
             allImgs.push_back(image);
             imgSize = image.size();
         }
-        //if(img_idx == 2981)
-        //    break;
+        if(img_idx == 2941)
+            break;
         img_idx++;
     }
     destroyWindow("out"); waitKey(1);

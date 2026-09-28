@@ -89,6 +89,12 @@ wget https://bootstrap.pypa.io/get-pip.py
 sudo python3.14 ./get-pip.py
 sudo python3.14 -m pip install -U --break-system-packages numpy Cython meson
 
+python3.14 -m venv .venv
+vim ~/code/goprostitch/,venv/bin/activate
+# Add $ROOT/python to PYTHONPATH
+source ~/code/goprostitch/,venv/bin/activate
+python3.14 -m pip install -U av --no-binary av
+
 curl -L "https://github.com/Netflix/vmaf/archive/refs/tags/v3.0.0.tar.gz" --remote-name
 tar xvf vmaf-3.0.0.tar.gz
 cd vmaf-3.0.0
@@ -162,4 +168,30 @@ ffmpeg -y -nostdin -safe 0 -f concat -i concat.txt -codec copy -map 0:0 -map 0:1
 
 source ~/software/python3.12-venv/syncvideos/bin/activate
 python3 flashdetect.py --video concat.mp4
+```
+
+# Stereo calibrate cameras
+```
+# Generate a charuco
+python3.14 generate_charuco.py --cols 14 --rows 7 --sl 0.0855 --ml 0.0637 --width 3840 --height 2160 --dict DICT_5X5_100 --output charuco_14x7_5x5_100.png ; eog char*.png
+
+cd ~/gopro
+mkdir stereocalibration_20260323
+cd stereocalibration_20260323
+mkdir left
+mkdir right
+rsync -avP /media/... ./
+ffmpeg -i left-GX*.MP4 left/frame%05d.jpg
+ffmpeg -i right-GX*.MP4 right/frame%05d.jpg
+
+cd left
+for i in frame0*.jpg; do X=`echo ${i%.jpg} | cut -c6- | sed 's/^0\+\([1-9][0-9]\+\)$/\1/g'`; N=$(($X-19)); P="00000$N"; mv $i frame${P: -5}.jpg;done
+
+mkdir pairs; cd pairs
+for side in left right; do for i in /home/lletourn/gopro/stereocalibration_20260323/${side}/fr*.jpg;do P=`echo $i | sed 's/.*frame\([0-9]\+\)\.jpg/\1/g'`; ln -s $i ${P}-${side}.jpg;done;done
+
+# Pick best pairs
+python3.14 select_calibration_frames.py --images ~/gopro/stereocalibration_20260323/pairs/ --cols 16 --rows 9 --square-size 85.5 --marker-size 63.7 --dict DICT_6X6_250 --workers 10 --skip-first 405 --target 200 --output selects.txt
+
+python3.14 stereo_calibrate.py calibrate --images-dir ~/gopro/stereocalibration_20260325/pairs-best/ --K "[[1.75935990e+03, 0.00000000e+00, 1.93990898e+03],[0.00000000e+00, 1.76012014e+03, 1.08960254e+03],[0.00000000e+00 ,0.00000000e+00, 1.00000000e+00]]" --D "[[-2.34437932e-01,  6.56214911e-02,  2.96285536e-05,  4.79786822e-05,-9.52601675e-03]]" --board-cols 14 --board-rows 7 --square-length 99.3 --marker-length 74 --dict DICT_5X5_100 --out stereo_calibration-20260327.json
 ```

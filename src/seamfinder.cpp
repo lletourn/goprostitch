@@ -66,7 +66,7 @@ void rotateImage(const Mat& src, Mat& dst, int width, int height, double angle) 
     warpAffine(src, dst, M, Size(width, height), INTER_LINEAR, BORDER_CONSTANT, (0, 0, 0));
 }
 
-void finding(const string& features_type, const vector<Mat>& src_images, const vector<PointPair>& point_pairs, vector<CameraParams>& cameras, vector<UMat>& masks_warped);
+void finding(const string& features_type, const vector<Mat>& src_images, float overlap_fraction, const vector<PointPair>& point_pairs, vector<CameraParams>& cameras, vector<UMat>& masks_warped);
 
 Rect cropPano(const Mat& panorama);
 
@@ -155,6 +155,7 @@ int main(int argc, char* argv[]) {
         "{camparams | | Camera parameter filename }"
         "{findcamparams | false | Generate camera parameters or read them from the file }"
         "{featuresfinder | sift | Features finder to use. sift, surf, orb}"
+        "{overlapfraction | 0.25 | Fraction of each image's X range to search for features (kept strip width); left keeps the rightmost fraction, right keeps the leftmost }"
     ;
 
     CommandLineParser parser(argc, argv, keys);
@@ -191,10 +192,16 @@ int main(int argc, char* argv[]) {
         spdlog::info("Generate camera params");
         string features_type = parser.get<string>("featuresfinder");
 
+        float overlap_fraction = parser.get<float>("overlapfraction");
+        if(overlap_fraction <= 0.0f || overlap_fraction > 1.0f) {
+            spdlog::warn("overlapfraction {} out of range (0, 1]; clamping to 0.25", overlap_fraction);
+            overlap_fraction = 0.25f;
+        }
+
         vector<PointPair> point_pairs;
         if(parser.has("keypoints"))
             point_pairs = readPointPairs(parser.get<string>("keypoints"));
-        finding(features_type, images, point_pairs, cameras, masks_warped);
+        finding(features_type, images, overlap_fraction, point_pairs, cameras, masks_warped);
     }
 
     Mat output_image;
@@ -320,10 +327,17 @@ Rect cropPano(const Mat& panorama) {
     return Rect(x1, y1, x2-x1, y2-y1);
 }
 
-void featurePairAuto(const string& features_type, const vector<Mat>& images, float conf_thresh, vector<ImageFeatures>& features, vector<MatchesInfo>& pairwise_matches) {
+void featurePairAuto(const string& features_type, const vector<Mat>& images, float conf_thresh, float overlap_fraction, vector<ImageFeatures>& features, vector<MatchesInfo>& pairwise_matches) {
     float match_conf = 0.50f;
 
-    spdlog::info("Finding features...");
+    // Only the overlap region of each image carries useful correspondences, so
+    // feature detection is restricted to that strip (see overlap_fraction; passed
+    // in via the --overlapfraction CLI arg). We never feed keypoints from the
+    // non-overlapping part of the frame into the homography estimate.
+    // Left image (index 0): keep the rightmost fraction of the X range.
+    // Right image (others): keep the leftmost fraction of the X range.
+
+    spdlog::info("Finding features (overlap fraction {})...", overlap_fraction);
     Ptr<Feature2D> finder;
     if (features_type == "orb") {
         finder = ORB::create();
@@ -344,7 +358,20 @@ void featurePairAuto(const string& features_type, const vector<Mat>& images, flo
     }
 
     for (int i = 0; i < images.size(); ++i) {
-        computeImageFeatures(finder, images[i], features[i]);
+        // Build a detection mask covering only the overlap strip. Keypoint
+        // coordinates and features[i].img_size stay in full-image space, so the
+        // downstream estimator's principal-point assumption is preserved.
+        Mat mask(images[i].size(), CV_8U, Scalar(0));
+        const int w = images[i].cols;
+        if (i == 0) {
+            const int x0 = cvRound((1.0f - overlap_fraction) * w);
+            mask(Rect(x0, 0, w - x0, images[i].rows)).setTo(255);
+        } else {
+            const int x1 = cvRound(overlap_fraction * w);
+            mask(Rect(0, 0, x1, images[i].rows)).setTo(255);
+        }
+
+        computeImageFeatures(finder, images[i], features[i], mask);
         features[i].img_idx = i;
         spdlog::info("Features in image #{}: {}", i+1, features[i].keypoints.size());
     }
@@ -363,7 +390,16 @@ void featurePairAuto(const string& features_type, const vector<Mat>& images, flo
     cout << "FEatures: " << features.size() << endl;
     cout << "PW: " << pairwise_matches.size() << endl;
     Mat pair_img;
-    drawMatches(images[0], features[0].getKeypoints(), images[1], features[1].getKeypoints(), pairwise_matches[1].getMatches(), pair_img);		
+    drawMatches(images[0], features[0].getKeypoints(), images[1], features[1].getKeypoints(), pairwise_matches[1].getMatches(), pair_img);
+
+    // Draw the overlap-strip boundary on each side. drawMatches lays image 0 on
+    // the left and image 1 on the right (offset by image 0's width), so the
+    // right-image boundary is shifted by images[0].cols.
+    const int left_boundary_x = cvRound((1.0f - overlap_fraction) * images[0].cols);
+    const int right_boundary_x = images[0].cols + cvRound(overlap_fraction * images[1].cols);
+    line(pair_img, Point(left_boundary_x, 0), Point(left_boundary_x, pair_img.rows), Scalar(0, 0, 255), 3);
+    line(pair_img, Point(right_boundary_x, 0), Point(right_boundary_x, pair_img.rows), Scalar(0, 0, 255), 3);
+
     imwrite("pair.png", pair_img);
 
     spdlog::info("Find matching images");
@@ -408,7 +444,7 @@ void featurePairManual(const vector<PointPair>& point_pairs, const vector<Size>&
     pairwise_matches.push_back(match_info);
 }
 
-void finding(const string& features_type, const vector<Mat>& src_images, const vector<PointPair>& point_pairs, vector<CameraParams>& cameras, vector<UMat>& masks_warped) {
+void finding(const string& features_type, const vector<Mat>& src_images, float overlap_fraction, const vector<PointPair>& point_pairs, vector<CameraParams>& cameras, vector<UMat>& masks_warped) {
 float conf_thresh = 0.1f;
 string ba_cost_func = "ray";
 string ba_refine_mask = "xxxxx";
@@ -436,7 +472,7 @@ string seam_find_type = "voronoi";
     }
 
     if(point_pairs.empty())
-        featurePairAuto(features_type, images, conf_thresh, features, pairwise_matches);
+        featurePairAuto(features_type, images, conf_thresh, overlap_fraction, features, pairwise_matches);
     else
         featurePairManual(point_pairs, full_img_sizes, features, pairwise_matches);
     
