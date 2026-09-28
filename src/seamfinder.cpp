@@ -732,7 +732,7 @@ bool clickBoardPoints(const Mat& preview, const Point& top_left, float scale, ve
         if(picker.changed) {
             picker.changed = false;
             Mat display = preview.clone();
-            string status = "Click the BASE of the far boards, left to right. Backspace: undo, Enter: compute (min 3), Esc: abort.";
+            string status = "Click the BASE of the far boards, in any order. Backspace: undo last, Enter: compute (min 3), Esc: abort.";
 
             if(picker.points.size() >= 2) {
                 fitBoardsPlane(picker.points, top_left, scale, normal, rms_px);
@@ -745,7 +745,10 @@ bool clickBoardPoints(const Mat& preview, const Point& top_left, float scale, ve
                         curve.emplace_back(px, cvRound(h * scale - top_left.y));
                     }
                 }
-                polylines(display, curve, false, Scalar(0, 255, 255), std::max(2, radius / 2));
+                // Semi-transparent so the boards stay visible under the curve
+                Mat overlay = display.clone();
+                polylines(overlay, curve, false, Scalar(0, 255, 255), std::max(2, radius / 2));
+                addWeighted(overlay, 0.4, display, 0.6, 0.0, display);
                 status += cv::format("  Points: %zu  RMS: %.1f px", picker.points.size(), rms_px);
                 spdlog::info("Boards fit: {} points, RMS {:.2f} px", picker.points.size(), rms_px);
             }
@@ -775,7 +778,9 @@ bool clickBoardPoints(const Mat& preview, const Point& top_left, float scale, ve
     }
 
     setMouseCallback("Tilt", nullptr);
+    // The plane fit doesn't depend on order; sort so the saved points read left to right
     points = picker.points;
+    std::sort(points.begin(), points.end(), [](const Point2f& a, const Point2f& b) { return a.x < b.x; });
     return true;
 }
 
